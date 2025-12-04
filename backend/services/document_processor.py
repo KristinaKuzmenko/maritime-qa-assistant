@@ -23,6 +23,7 @@ from services.graph_service import Neo4jClient
 from services.vector_service import VectorService
 from services.region_classifier import RegionClassifier
 from services.smart_region_processor import SmartRegionProcessor
+from services.entity_extractor import get_entity_extractor, EntityExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +58,17 @@ class DocumentProcessor:
             numeric_density_threshold=0.15,  # Min numeric ratio for table
         )
         
+        # Get LLM service from schema_extractor for smart detection
+        llm_service = getattr(schema_extractor, 'llm_service', None)
+        
         self.smart_processor = SmartRegionProcessor(
             table_extractor=table_extractor,
             schema_extractor=schema_extractor,
+            enable_llm_detection=True,  # Enable LLM-based type detection
         )
 
-        
-
-        # Maritime terminology dictionary
-        self.maritime_terms = self._load_maritime_terms()
-        
-        # Entity recognition patterns
-        self.marine_systems = self._load_marine_systems()
-        self.component_types = self._load_component_types()
+        # Entity extractor (singleton with dictionary)
+        self.entity_extractor: EntityExtractor = get_entity_extractor()
 
         # Regex patterns for structure detection
         self.chapter_pattern = re.compile(
@@ -91,56 +90,6 @@ class DocumentProcessor:
         
         # Section merging threshold
         self.min_section_length = 200  # chars
-
-
-    # Initialization helpers
-
-
-    def _load_maritime_terms(self) -> Dict[str, Dict]:
-        """Load predefined maritime domain terms for semantic linking."""
-        return {
-            "MCR": {"definition": "Maximum Continuous Rating", "context": "engine"},
-            "NCR": {"definition": "Normal Continuous Rating", "context": "engine"},
-            "SFOC": {"definition": "Specific Fuel Oil Consumption", "context": "engine"},
-            "ECDIS": {"definition": "Electronic Chart Display and Information System", "context": "navigation"},
-            "AIS": {"definition": "Automatic Identification System", "context": "navigation"},
-            "GMDSS": {"definition": "Global Maritime Distress and Safety System", "context": "navigation"},
-            "SOLAS": {"definition": "Safety of Life at Sea", "context": "regulation"},
-            "MARPOL": {"definition": "Marine Pollution", "context": "regulation"},
-            "LSA": {"definition": "Life-Saving Appliances", "context": "safety"},
-            "DWT": {"definition": "Deadweight Tonnage", "context": "technical"},
-            "GT": {"definition": "Gross Tonnage", "context": "technical"},
-            "LOA": {"definition": "Length Overall", "context": "technical"},
-            "FO": {"definition": "Fuel Oil", "context": "system"},
-            "LO": {"definition": "Lubricating Oil", "context": "system"},
-            "SW": {"definition": "Sea Water", "context": "system"},
-            "FW": {"definition": "Fresh Water", "context": "system"},
-        }
-    
-    def _load_marine_systems(self) -> List[str]:
-        """Load list of marine systems for entity extraction."""
-        return [
-            "fuel oil", "fuel oil system", "lubrication", "lubrication system",
-            "lubricating oil", "cooling water", "cooling system", "sea water cooling",
-            "fresh water cooling", "hydraulic", "hydraulic system", "pneumatic",
-            "pneumatic system", "compressed air", "ballast", "ballast system",
-            "bilge", "bilge system", "fire fighting", "fire protection",
-            "sewage", "sewage system", "fresh water", "fresh water system",
-            "sea water", "steering gear", "steering system", "mooring",
-            "anchor", "propulsion", "propulsion system", "electrical",
-            "electrical system", "power generation", "emergency power",
-            "ventilation", "hvac", "fuel system", "exhaust system",
-        ]
-    
-    def _load_component_types(self) -> List[str]:
-        """Load list of component types for entity extraction."""
-        return [
-            "pump", "valve", "tank", "heat exchanger", "cooler",
-            "filter", "separator", "compressor", "motor", "generator",
-            "engine", "sensor", "gauge", "transmitter", "controller",
-            "actuator", "pipe", "pipeline", "duct", "manifold",
-            "strainer", "silencer", "damper",
-        ]
 
     # -------------------------------------------------------------------------
     # MAIN DOCUMENT PROCESS PIPELINE
@@ -432,12 +381,13 @@ class DocumentProcessor:
             # Process each region with intelligent extraction and fallback logic
             page_schemas_list = []
             page_tables_list = []
+            page_text_chunks_list = []  # For LLM-extracted text regions
             
             safe_doc_id = self._sanitize(doc_id)
             
             for region in reclassified_regions:
                 if region.region_type == RegionType.TABLE:
-                    # Try table extraction → fallback to schema
+                    # Try table extraction → fallback to LLM detection (TABLE/TEXT/DIAGRAM)
                     result = await self.smart_processor.process_table_region(
                         fitz_page=page,
                         pl_page=pl_page,
@@ -453,8 +403,11 @@ class DocumentProcessor:
                     if result['type'] == 'table':
                         # Successfully extracted as table
                         page_tables_list.extend(result['chunks'])
-                    elif result['type'] == 'schema_fallback':
-                        # Failed as table, fell back to schema
+                    elif result['type'] == 'text':
+                        # LLM determined it's text content
+                        page_text_chunks_list.extend(result['chunks'])
+                    elif result['type'] in ('schema', 'schema_fallback'):
+                        # Diagram/schema content
                         page_schemas_list.extend(result['chunks'])
                 
                 elif region.region_type == RegionType.SCHEMA:
@@ -493,6 +446,17 @@ class DocumentProcessor:
                 page_tables[page_num] = page_tables_list
                 logger.info(
                     f"Page {page_num + 1}: extracted {len(page_tables_list)} table chunk(s)"
+                )
+            
+            # Process LLM-extracted text chunks (add to page text for section processing)
+            if page_text_chunks_list:
+                for text_chunk in page_text_chunks_list:
+                    # Append LLM-extracted text to page_text for normal text processing
+                    llm_text = text_chunk.get('content', '')
+                    if llm_text:
+                        page_text = page_text + "\n\n" + llm_text
+                logger.info(
+                    f"Page {page_num + 1}: extracted {len(page_text_chunks_list)} text region(s) via LLM"
                 )
             
             # # Get occupied bboxes for text extraction (from reclassified regions)
@@ -766,7 +730,8 @@ class DocumentProcessor:
             "thumbnail_path": metadata["thumbnail_path"],
             "bbox": metadata["bbox"],
             "confidence": metadata["confidence"],
-            "text_context": schema_chunk["content"], 
+            "text_context": schema_chunk["content"],  # Rich context (includes LLM summary if generated)
+            "llm_summary": metadata.get("llm_summary", ""),  # Store LLM summary separately
         }
         
         # Create Schema node in Neo4j
@@ -777,23 +742,16 @@ class DocumentProcessor:
             f"(page {schema_chunk['page_number']})"
         )
 
-        # Extract entities from schema context
+        # Extract entities from schema context using EntityExtractor
         caption = metadata["caption"]
         text_context = schema_chunk["content"]
         
-        # Extract entities
-        schema_entity_ids = await self._extract_entities_from_text(
+        # Extract entities using new method
+        schema_entity_ids, schema_system_ids = await self._extract_entities_for_schema(
             text=f"{caption} {text_context}",
+            schema_id=schema_id,
             doc_id=doc_id,
-            source_type="schema",
-            source_id=schema_id,
         )
-        
-        schema_system_ids = [eid for eid in schema_entity_ids if eid.startswith("sys_")]
-        
-        # Link entities to schema
-        for entity_id in schema_entity_ids:
-            await self.graph.link_schema_to_entity(schema_id, entity_id)
         
         # Index schema in Qdrant with enhanced context
         if self.vector is not None:
@@ -872,28 +830,22 @@ class DocumentProcessor:
                 f"{metadata['rows']}x{metadata['cols']})"
             )
             
-            # Extract and link entities from table content
-            table_entity_ids = await self._extract_entities_from_text(
+            # Extract and link entities from table content using EntityExtractor
+            table_entity_ids, table_system_ids = await self._extract_entities_for_table(
                 text=table_chunk["content"],
+                table_id=table_id,
                 doc_id=doc_id,
-                source_type="table",
-                source_id=table_id,
             )
-            
-            table_system_ids = [eid for eid in table_entity_ids if eid.startswith("sys_")]
-            
-            # Link entities to table
-            for entity_id in table_entity_ids:
-                await self.graph.link_table_to_entity(table_id, entity_id)
         else:
-            # Subsequent chunks - just get system IDs for vector metadata
-            table_entity_ids = await self._extract_entities_from_text(
+            # Subsequent chunks - extract entities for vector metadata (no graph linking)
+            extraction = self.entity_extractor.extract_from_text(
                 text=table_chunk["content"],
-                doc_id=doc_id,
-                source_type="table",
-                source_id=table_id,
+                extract_systems=True,
+                extract_components=True,
+                link_hierarchy=True,
             )
-            table_system_ids = [eid for eid in table_entity_ids if eid.startswith("sys_")]
+            table_entity_ids = extraction["entity_ids"]
+            table_system_ids = extraction["systems"]
         
         #  Create TableChunk node in Neo4j
         chunk_id = await self.graph.create_table_chunk(
@@ -1114,17 +1066,31 @@ class DocumentProcessor:
         # Store for schema/table linking
         self._last_section_id = section_id
         
-        # Entity extraction 
-        entity_ids = await self._extract_and_link_entities(
-            section_id=section_id,
-            content=content,
-            doc_id=doc_id,
+        # Entity extraction using new EntityExtractor
+        extraction_result = self.entity_extractor.extract_from_text(
+            text=content,
+            extract_systems=True,
+            extract_components=True,
+            link_hierarchy=True,
         )
-        entity_ids = []
-        system_ids = []
         
-        # Term extraction DISABLED (depends on entities)
-        # await self._extract_and_link_terms(section_id, content)
+        entity_ids = extraction_result["entity_ids"]
+        system_ids = extraction_result["systems"]
+        
+        # Create/link entities in graph
+        for sys_code in extraction_result["systems"]:
+            await self._create_and_link_system_entity(
+                system_code=sys_code,
+                section_id=section_id,
+                doc_id=doc_id,
+            )
+        
+        for comp in extraction_result["components"]:
+            await self._create_and_link_component_entity(
+                component=comp,
+                section_id=section_id,
+                doc_id=doc_id,
+            )
         
         # Create chunks for Qdrant
         if self.vector is not None:
@@ -1315,138 +1281,270 @@ class DocumentProcessor:
         return "text"
 
     # -------------------------------------------------------------------------
-    # Entity extraction and linking
+    # Entity extraction and linking (using EntityExtractor)
     # -------------------------------------------------------------------------
 
-    async def _extract_entities_from_text(
+    async def _create_and_link_system_entity(
+        self,
+        system_code: str,
+        section_id: str,
+        doc_id: str,
+    ) -> str:
+        """
+        Create system entity in graph and link to section.
+        
+        :param system_code: Normalized system code (e.g., 'sys_fuel_oil')
+        :param section_id: Section ID to link to
+        :param doc_id: Document ID
+        :return: Entity ID
+        """
+        # Get system info from dictionary
+        systems = self.entity_extractor.dictionary.get("systems", {})
+        system_info = None
+        
+        for sys_key, sys_data in systems.items():
+            if sys_data.get("code") == system_code:
+                system_info = sys_data
+                break
+        
+        entity_data = {
+            "code": system_code,
+            "name": system_info.get("canonical", system_code) if system_info else system_code,
+            "entity_type": "System",
+            "system": system_info.get("canonical", "") if system_info else "",
+            "tags": ["from-section"],
+            "metadata": {"doc_id": doc_id, "section_id": section_id},
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_section_to_entity(section_id, entity_id)
+        
+        # Create PART_OF relationships if parent exists
+        if system_info and system_info.get("parent"):
+            parent_key = system_info["parent"]
+            if parent_key in systems:
+                parent_code = systems[parent_key].get("code", f"sys_{parent_key}")
+                parent_data = {
+                    "code": parent_code,
+                    "name": systems[parent_key].get("canonical", parent_key),
+                    "entity_type": "System",
+                    "system": systems[parent_key].get("canonical", ""),
+                    "tags": ["from-section"],
+                    "metadata": {"doc_id": doc_id},
+                }
+                parent_id = await self.graph.create_entity(parent_data)
+                await self.graph.create_entity_relation(entity_id, parent_id, "PART_OF")
+        
+        return entity_id
+
+    async def _create_and_link_component_entity(
+        self,
+        component: Dict[str, Any],
+        section_id: str,
+        doc_id: str,
+    ) -> str:
+        """
+        Create component entity in graph and link to section.
+        
+        :param component: Component dict with 'name', 'type', 'code'
+        :param section_id: Section ID to link to
+        :param doc_id: Document ID
+        :return: Entity ID
+        """
+        entity_data = {
+            "code": component["code"],
+            "name": component["name"].title(),
+            "entity_type": "Component",
+            "system": None,  # Will be linked via PART_OF if inferable
+            "tags": ["from-section", component["type"]],
+            "metadata": {
+                "doc_id": doc_id,
+                "section_id": section_id,
+                "component_type": component["type"],
+            },
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_section_to_entity(section_id, entity_id)
+        
+        return entity_id
+
+    async def _extract_entities_for_schema(
         self,
         text: str,
+        schema_id: str,
         doc_id: str,
-        source_type: str,
-        source_id: str,
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[str]]:
         """
-        Extract entities from text (unified method for sections, schemas, tables).
+        Extract entities from schema caption/context using EntityExtractor.
         
-        :param text: Text to extract from
+        :param text: Combined caption + context text
+        :param schema_id: Schema ID
         :param doc_id: Document ID
-        :param source_type: Source type (section/schema/table)
-        :param source_id: Source node ID
-        :return: List of entity IDs
+        :return: Tuple of (entity_ids, system_ids)
         """
-        entity_ids = []
-        content_lower = text.lower()
-
-        # Extract systems
-        for system in self.marine_systems:
-            if system in content_lower:
-                entity_code = f"sys_{system.replace(' ', '_').replace('-', '_')}"
-                
-                entity_data = {
-                    "code": entity_code,
-                    "name": system.title(),
-                    "entity_type": "System",
-                    "system": system,
-                    "tags": [f"from-{source_type}"],
-                    "metadata": {"doc_id": doc_id, f"{source_type}_id": source_id},
-                }
-                
-                entity_id = await self.graph.create_entity(entity_data)
-                entity_ids.append(entity_id)
-
-        # Extract components
-        components = self._find_components(text)
-        
-        for comp in components:
-            comp_name = comp["full_name"]
-            entity_code = f"comp_{hashlib.md5(comp_name.encode()).hexdigest()[:12]}"
-            
-            entity_data = {
-                "code": entity_code,
-                "name": comp_name.title(),
-                "entity_type": "Component",
-                "system": None,
-                "tags": [f"from-{source_type}", comp["type"]],
-                "metadata": {
-                    "doc_id": doc_id,
-                    f"{source_type}_id": source_id,
-                    "component_type": comp["type"],
-                },
-            }
-            
-            entity_id = await self.graph.create_entity(entity_data)
-            entity_ids.append(entity_id)
-
-        return entity_ids
-
-    async def _extract_and_link_entities(
-        self,
-        section_id: str,
-        content: str,
-        doc_id: str,
-    ) -> List[str]:
-        """
-        Extract marine systems and components from section text.
-        Create entity nodes and link to section.
-        """
-        entity_ids = await self._extract_entities_from_text(
-            text=content,
-            doc_id=doc_id,
-            source_type="section",
-            source_id=section_id,
+        extraction = self.entity_extractor.extract_from_text(
+            text=text,
+            extract_systems=True,
+            extract_components=True,
+            link_hierarchy=True,
         )
         
-        # Link to section
-        for entity_id in entity_ids:
-            await self.graph.link_section_to_entity(section_id, entity_id)
+        entity_ids = extraction["entity_ids"]
+        system_ids = extraction["systems"]
         
-        return entity_ids
+        # Create entities and link to schema
+        for sys_code in extraction["systems"]:
+            await self._create_system_entity_for_schema(sys_code, schema_id, doc_id)
+        
+        for comp in extraction["components"]:
+            await self._create_component_entity_for_schema(comp, schema_id, doc_id)
+        
+        return entity_ids, system_ids
 
-    def _find_components(self, text: str) -> List[Dict]:
+    async def _create_system_entity_for_schema(
+        self,
+        system_code: str,
+        schema_id: str,
+        doc_id: str,
+    ) -> str:
+        """Create system entity and link to schema via DEPICTS."""
+        systems = self.entity_extractor.dictionary.get("systems", {})
+        system_info = None
+        
+        for sys_key, sys_data in systems.items():
+            if sys_data.get("code") == system_code:
+                system_info = sys_data
+                break
+        
+        entity_data = {
+            "code": system_code,
+            "name": system_info.get("canonical", system_code) if system_info else system_code,
+            "entity_type": "System",
+            "system": system_info.get("canonical", "") if system_info else "",
+            "tags": ["from-schema"],
+            "metadata": {"doc_id": doc_id, "schema_id": schema_id},
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_schema_to_entity(schema_id, entity_id)
+        
+        return entity_id
+
+    async def _create_component_entity_for_schema(
+        self,
+        component: Dict[str, Any],
+        schema_id: str,
+        doc_id: str,
+    ) -> str:
+        """Create component entity and link to schema via DEPICTS."""
+        entity_data = {
+            "code": component["code"],
+            "name": component["name"].title(),
+            "entity_type": "Component",
+            "system": None,
+            "tags": ["from-schema", component["type"]],
+            "metadata": {
+                "doc_id": doc_id,
+                "schema_id": schema_id,
+                "component_type": component["type"],
+            },
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_schema_to_entity(schema_id, entity_id)
+        
+        return entity_id
+
+    async def _extract_entities_for_table(
+        self,
+        text: str,
+        table_id: str,
+        doc_id: str,
+    ) -> Tuple[List[str], List[str]]:
         """
-        Extract component mentions with context and cleaning.
+        Extract entities from table caption/content using EntityExtractor.
+        
+        :param text: Combined caption + content text
+        :param table_id: Table ID
+        :param doc_id: Document ID
+        :return: Tuple of (entity_ids, system_ids)
         """
-        components = []
-        text_lower = text.lower()
+        extraction = self.entity_extractor.extract_from_text(
+            text=text,
+            extract_systems=True,
+            extract_components=True,
+            link_hierarchy=True,
+        )
         
-        for comp_type in self.component_types:
-            pattern = rf'\b(\w+\s+)?{comp_type}s?\b'
-            matches = re.finditer(pattern, text_lower)
-            
-            for match in matches:
-                full_name = match.group(0).strip()
-                
-                # Clean up
-                full_name = re.sub(r'^\d+\s*', '', full_name)
-                full_name = re.sub(r'\n', ' ', full_name)
-                full_name = ' '.join(full_name.split())
-                
-                # Filter generic mentions
-                if len(full_name.split()) == 1 and comp_type in ["pipe", "motor"]:
-                    continue
-                
-                if not full_name or len(full_name) < 3:
-                    continue
-                
-                components.append({
-                    "type": comp_type,
-                    "full_name": full_name,
-                    "position": match.start(),
-                })
+        entity_ids = extraction["entity_ids"]
+        system_ids = extraction["systems"]
         
-        # Deduplicate
-        seen = set()
-        unique_components = []
-        for comp in components:
-            normalized = comp["full_name"].lower().strip()
-            if normalized not in seen:
-                seen.add(normalized)
-                unique_components.append(comp)
+        # Create entities and link to table
+        for sys_code in extraction["systems"]:
+            await self._create_system_entity_for_table(sys_code, table_id, doc_id)
         
-        return unique_components
+        for comp in extraction["components"]:
+            await self._create_component_entity_for_table(comp, table_id, doc_id)
+        
+        return entity_ids, system_ids
+
+    async def _create_system_entity_for_table(
+        self,
+        system_code: str,
+        table_id: str,
+        doc_id: str,
+    ) -> str:
+        """Create system entity and link to table via MENTIONS."""
+        systems = self.entity_extractor.dictionary.get("systems", {})
+        system_info = None
+        
+        for sys_key, sys_data in systems.items():
+            if sys_data.get("code") == system_code:
+                system_info = sys_data
+                break
+        
+        entity_data = {
+            "code": system_code,
+            "name": system_info.get("canonical", system_code) if system_info else system_code,
+            "entity_type": "System",
+            "system": system_info.get("canonical", "") if system_info else "",
+            "tags": ["from-table"],
+            "metadata": {"doc_id": doc_id, "table_id": table_id},
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_table_to_entity(table_id, entity_id)
+        
+        return entity_id
+
+    async def _create_component_entity_for_table(
+        self,
+        component: Dict[str, Any],
+        table_id: str,
+        doc_id: str,
+    ) -> str:
+        """Create component entity and link to table via MENTIONS."""
+        entity_data = {
+            "code": component["code"],
+            "name": component["name"].title(),
+            "entity_type": "Component",
+            "system": None,
+            "tags": ["from-table", component["type"]],
+            "metadata": {
+                "doc_id": doc_id,
+                "table_id": table_id,
+                "component_type": component["type"],
+            },
+        }
+        
+        entity_id = await self.graph.create_entity(entity_data)
+        await self.graph.link_table_to_entity(table_id, entity_id)
+        
+        return entity_id
 
     # -------------------------------------------------------------------------
-    # Scoring and term extraction
+    # Scoring
     # -------------------------------------------------------------------------
 
     def _calculate_importance_score(self, content: str) -> float:
@@ -1464,22 +1562,6 @@ class DocumentProcessor:
                 score += 0.1
         
         return min(score, 1.0)
-
-    async def _extract_and_link_terms(self, section_id: str, content: str) -> None:
-        """Extract maritime terms and create Term nodes."""
-        content_upper = content.upper()
-        
-        for term_key, term_info in self.maritime_terms.items():
-            if term_key in content_upper:
-                term_data = {
-                    "term": term_key,
-                    "abbreviation": term_key,
-                    "definition": term_info["definition"],
-                    "context": term_info["context"],
-                }
-                
-                term_id = await self.graph.create_term(term_data)
-                await self.graph.link_section_to_term(section_id, term_id)
 
     # -------------------------------------------------------------------------
     # Post-processing 

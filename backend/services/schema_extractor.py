@@ -155,6 +155,44 @@ class SchemaExtractor:
         
         return schemas
     
+    async def extract_schema_from_region(
+        self,
+        page: fitz.Page,
+        region: Region,
+        doc_id: str,
+        page_num: int,
+        idx: int = 0,
+        text_context: Optional[str] = None,
+        section_id: Optional[str] = None,
+        doc_id_sanitized: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract schema from a pre-detected region (public method).
+        Use this when region is already detected to avoid duplicate analyze_page calls.
+        
+        :param page: PyMuPDF page object
+        :param region: Pre-detected schema region
+        :param doc_id: Document ID
+        :param page_num: Page number (zero-based)
+        :param idx: Schema index on page
+        :param text_context: Text content from page/section for context
+        :param section_id: Associated section ID
+        :param doc_id_sanitized: Sanitized doc ID for file paths
+        :return: Schema metadata dict or None
+        """
+        safe_doc_id = doc_id_sanitized or self._sanitize(doc_id)
+        
+        return await self._extract_schema_region(
+            page=page,
+            region=region,
+            doc_id=doc_id,
+            safe_doc_id=safe_doc_id,
+            page_num=page_num,
+            idx=idx,
+            text_context=text_context,
+            section_id=section_id,
+        )
+    
     async def _extract_schema_region(
         self,
         page: fitz.Page,

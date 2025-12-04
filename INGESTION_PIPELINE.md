@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Maritime QA Assistant uses a sophisticated multi-stage ingestion pipeline to process large technical maritime PDF documents. The pipeline combines layout analysis, content classification, entity extraction, and vector indexing to create a comprehensive knowledge graph suitable for intelligent question-answering.
+The Maritime QA Assistant uses a sophisticated multi-stage ingestion pipeline to process large technical maritime PDF documents. The pipeline combines layout analysis, content classification, **entity extraction**, and vector indexing to create a comprehensive knowledge graph suitable for intelligent question-answering.
 
 ## Architecture Components
 
@@ -13,9 +13,10 @@ The Maritime QA Assistant uses a sophisticated multi-stage ingestion pipeline to
 3. **RegionClassifier** - Content-based region reclassification
 4. **SchemaExtractor** - Technical diagram/schema extraction
 5. **TableExtractor** - Structured table data extraction
-6. **Neo4jClient** - Graph database operations (hierarchical document structure)
-7. **VectorService** - Qdrant vector database operations (semantic search)
-8. **StorageService** - File storage for extracted images and tables
+6. **EntityExtractor** - Maritime domain entity recognition and normalization
+7. **Neo4jClient** - Graph database operations (hierarchical document structure)
+8. **VectorService** - Qdrant vector database operations (semantic search)
+9. **StorageService** - File storage for extracted images and tables
 
 ### Data Stores
 
@@ -409,7 +410,167 @@ Otherwise:
 
 ---
 
-### Stage 8: Status Update and Completion
+### Stage 8: Entity Extraction and Linking
+
+**Purpose:** Extract maritime domain entities (systems, components) and create graph relationships for entity-based search.
+
+**Note:** Entity extraction happens **during** Stages 5 and 6 (when creating text chunks, schemas, and tables), not as a separate stage. This section documents the extraction logic.
+
+#### EntityExtractor Service
+
+The `EntityExtractor` uses a **dictionary-based approach** for consistent entity recognition:
+
+**Dictionary Structure (`entity_dictionary.json`):**
+```json
+{
+  "systems": {
+    "fuel_oil": {
+      "code": "fo_system",
+      "canonical": "Fuel Oil System",
+      "aliases": ["fuel system", "FO system", "fuel oil service"],
+      "keywords": ["fuel oil", "diesel oil", "heavy fuel"],
+      "abbreviations": ["FO", "HFO", "MDO", "MGO"],
+      "subsystems": ["transfer", "supply", "purification", "storage"]
+    },
+    "cooling_water": {
+      "code": "cw_system",
+      "canonical": "Cooling Water System",
+      "aliases": ["cooling system", "CW system"],
+      "keywords": ["cooling water", "jacket water", "fresh water cooling"],
+      "abbreviations": ["CW", "FW", "SW", "JW"]
+    }
+  },
+  "component_types": {
+    "pump": {
+      "patterns": ["pump", "pumping unit"],
+      "qualifiers": ["main", "auxiliary", "standby", "emergency", "transfer", "supply"]
+    },
+    "valve": {
+      "patterns": ["valve", "cock", "gate"],
+      "qualifiers": ["safety", "relief", "isolation", "control", "check", "shut-off"]
+    }
+  }
+}
+```
+
+#### Extraction Process
+
+**For each section/schema/table:**
+
+1. **System Extraction:**
+   - Match text against system keywords and aliases
+   - Resolve abbreviations (FO → fuel_oil_system)
+   - Return normalized system codes
+
+2. **Component Extraction:**
+   - Match component patterns with optional qualifiers
+   - Example: "main fuel oil pump" → `{type: "pump", qualifier: "main", system: "fo_system"}`
+   - Generate component codes: `fo_pump_main`
+
+3. **Equipment Code Detection:**
+   - Regex patterns for equipment codes: `P-101`, `V-205`, `HE-301`
+   - Auto-detect type from prefix (P = pump, V = valve, HE = heat exchanger)
+   - Create entity with `source: "equipment_code"`
+
+4. **Fallback Extraction:**
+   - For unknown systems: generic pattern matching
+   - For unknown components: extract based on component type keywords
+   - Mark with `source: "fallback"` for quality tracking
+
+**Code Example:**
+```python
+extractor = EntityExtractor()
+
+result = extractor.extract_from_text(
+    "The main fuel oil pump P-101 supplies fuel to the engine..."
+)
+# Returns:
+# {
+#     "systems": ["fo_system"],
+#     "components": [
+#         {"code": "fo_pump_main", "type": "pump", "qualifier": "main", "system": "fo_system"},
+#         {"code": "P-101", "type": "pump", "source": "equipment_code"}
+#     ],
+#     "entity_ids": ["fo_system", "fo_pump_main", "P-101"]
+# }
+```
+
+#### Graph Node Creation
+
+**Entity Nodes:**
+```cypher
+CREATE (e:Entity {
+    code: "fo_system",           // Normalized code
+    type: "system",              // system | component | equipment
+    canonical_name: "Fuel Oil System",
+    source: "dictionary"         // dictionary | equipment_code | fallback
+})
+```
+
+**Relationships:**
+```cypher
+// Section describes entity
+(Section)-[:DESCRIBES]->(Entity)
+
+// Table mentions entity (in content or caption)
+(Table)-[:MENTIONS]->(Entity)
+
+// Schema depicts entity (in diagram)
+(Schema)-[:DEPICTS]->(Entity)
+
+// Component is part of system
+(Entity:Component)-[:PART_OF]->(Entity:System)
+
+// Entity hierarchy
+(Entity)-[:CHILD_OF]->(Entity)
+```
+
+#### Query-Time Entity Extraction
+
+The same `EntityExtractor` is used at query time to:
+1. Extract entities from user questions
+2. Expand entity IDs (e.g., "FO pump" → ["fo_system", "fo_pump"])
+3. Query graph for related content via relationships
+
+**Query Example:**
+```python
+# User asks: "Tell me about the fuel oil pump"
+
+extraction = extractor.extract_from_question("fuel oil pump")
+# → entity_ids: ["fo_system", "fo_pump"]
+
+# Graph query:
+MATCH (e:Entity)<-[:DESCRIBES]-(s:Section)
+WHERE e.code IN $entity_ids
+RETURN s.content, s.title
+```
+
+#### Entity Payload in Qdrant
+
+Entities are stored in Qdrant payloads for filtered search:
+```python
+{
+    "type": "text_chunk",
+    "text": "...",
+    "entity_ids": ["fo_system", "fo_pump_main", "P-101"],
+    "system_ids": ["fo_system"],
+    # ... other metadata
+}
+```
+
+This enables entity-filtered vector search:
+```python
+# Search chunks related to fuel oil system
+filter = Filter(
+    must=[
+        FieldCondition(key="entity_ids", match=MatchAny(any=["fo_system"]))
+    ]
+)
+```
+
+---
+
+### Stage 9: Status Update and Completion
 
 **Process:**
 1. Update Document node status: `"completed"`

@@ -95,7 +95,7 @@ class LayoutAnalyzer:
     def __init__(
         self,
         model_path: str = "../models/yolov10s-best.pt",
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.4,  # Lower default for better table detection
         vector_drawing_threshold: int = 100,  # Min drawings to consider page as schema
         iou_threshold: float = 0.4,
     ) -> None:
@@ -137,7 +137,11 @@ class LayoutAnalyzer:
             regions = self._detect_with_yolo(page, page_num)
         
         # Fallback: check for schema-heavy page based on vector graphics
-        if not self._has_schema_region(regions):
+        # BUT: Don't add full-page schema if YOLO already found TABLE regions
+        # Tables also have many vector drawings (grid lines)!
+        has_table = any(r.region_type == RegionType.TABLE for r in regions)
+        
+        if not self._has_schema_region(regions) and not has_table:
             if self._is_schema_heavy_page(page):
                 # Treat entire page as schema
                 page_rect = page.rect
@@ -222,6 +226,12 @@ class LayoutAnalyzer:
                 region_type = self.DOCLAYNET_TO_SUPERCLASS.get(
                     class_id,
                     RegionType.TEXT,  # default
+                )
+                
+                # Log raw YOLO detection for debugging
+                logger.debug(
+                    f"Page {page_num + 1}: YOLO raw detection - "
+                    f"class_id={class_id}, conf={confidence:.2f}, mapped_to={region_type.value}"
                 )
                 
                 # Get bbox coordinates (in image space)
