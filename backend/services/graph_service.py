@@ -1317,19 +1317,7 @@ class Neo4jClient:
                 f"chunks={orphan_stats.get('chunks_orphan', 0)}"
             )
 
-        # Step 3: Clean up ALL orphaned Terms (not just from this doc)
-        query_orphaned_terms = """
-        MATCH (t:Term)
-        WHERE NOT (t)<-[:USES_TERM]-()
-        DETACH DELETE t
-        RETURN count(t) as deleted_terms
-        """
-        term_result = await self.run_query(query_orphaned_terms)
-        deleted_terms = term_result[0]["deleted_terms"] if term_result else 0
-        if deleted_terms > 0:
-            logger.info(f"🧹 Deleted {deleted_terms} orphaned terms")
-        
-        # Step 4: Clean up ALL orphaned Entities (not just from this doc)
+        # Step 3: Clean up ALL orphaned Entities (not just from this doc)
         query_orphaned_entities = """
         MATCH (e:Entity)
         WHERE NOT (e)<-[:DESCRIBES|DEPICTS|MENTIONS]-()
@@ -1366,49 +1354,4 @@ class Neo4jClient:
                 doc["metadata"] = {}
         
         return doc
-    
-    # -------------------------------------------------------------------------
-    # Utilities for cleanup and maintenance
-    # -------------------------------------------------------------------------
-
-    async def cleanup_orphaned_nodes(self) -> Dict[str, int]:
-        """
-        Clean up orphaned Term and Entity nodes.
-        Useful after document deletion or as periodic maintenance.
-        
-        :return: Dictionary with counts of deleted nodes
-        """
-        # Delete orphaned Terms
-        query_terms = """
-        MATCH (t:Term)
-        WHERE NOT (t)<-[:USES_TERM]-()
-        WITH t
-        DETACH DELETE t
-        RETURN count(t) as deleted_terms
-        """
-        
-        result_terms = await self.run_query(query_terms)
-        deleted_terms = result_terms[0]["deleted_terms"] if result_terms else 0
-        
-        # Delete orphaned Entities
-        query_entities = """
-        MATCH (e:Entity)
-        WHERE NOT (e)<-[:DESCRIBES|DEPICTS|MENTIONS]-()
-        WITH e
-        DETACH DELETE e
-        RETURN count(e) as deleted_entities
-        """
-        
-        result_entities = await self.run_query(query_entities)
-        deleted_entities = result_entities[0]["deleted_entities"] if result_entities else 0
-        
-        logger.info(
-            f"Cleaned up orphaned nodes: "
-            f"{deleted_terms} terms, {deleted_entities} entities"
-        )
-        
-        return {
-            "deleted_terms": deleted_terms,
-            "deleted_entities": deleted_entities,
-            "total_deleted": deleted_terms + deleted_entities,
-        }
+   
