@@ -61,12 +61,8 @@ class VectorService:
 
         # Collection names from settings
         self.text_collection = settings.text_chunks_collection
-        self.schemas_collection = settings.schemas_collection  # NEW
+        self.schemas_collection = settings.schemas_collection
         self.tables_text_collection = settings.tables_text_collection
-        
-        # Deprecated collections (kept for backward compatibility)
-        self.figures_text_collection = getattr(settings, "figures_text_collection", "figures_text")
-        self.figures_image_collection = getattr(settings, "figures_image_collection", "figures_image")
 
     # -------------------------------------------------------------------------
     # Collections Management
@@ -102,14 +98,6 @@ class VectorService:
                 vectors_config=VectorParams(size=dim, distance=distance),
             )
             logger.info(f"Created collection: {self.tables_text_collection}")
-        
-        # Backward compatibility: Keep old collections if they exist
-        if self.figures_text_collection not in existing:
-            self.client.create_collection(
-                collection_name=self.figures_text_collection,
-                vectors_config=VectorParams(size=dim, distance=distance),
-            )
-            logger.info(f"Created collection: {self.figures_text_collection} (legacy)")
 
     # -------------------------------------------------------------------------
     # Embeddings Helpers
