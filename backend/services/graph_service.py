@@ -323,8 +323,6 @@ class Neo4jClient:
             importance_score: $importance_score,
             page_start: $page_start,
             page_end: $page_end,
-            char_start: $char_start,
-            char_end: $char_end,
             doc_id: chapter.doc_id,
             created_at: datetime()
         """
@@ -356,8 +354,6 @@ class Neo4jClient:
             "importance_score": section_data.get("importance_score", 0.0),
             "page_start": section_data.get("page_start"),
             "page_end": section_data.get("page_end"),
-            "char_start": section_data.get("char_start", 0),
-            "char_end": section_data.get("char_end", 0),
         }
         
         # Add merged section params if present
@@ -1124,33 +1120,56 @@ class Neo4jClient:
     async def get_document_stats(self, doc_id: Optional[str] = None) -> Dict:
         """Get statistics about documents in the knowledge base"""
         if doc_id:
+            # Use CALL subqueries to count each type separately, avoiding cartesian products
             query = """
             MATCH (d:Document {id: $doc_id})
-            OPTIONAL MATCH (d)-[:HAS_CHAPTER]->(c:Chapter)
-            OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->(s:Section)
-            OPTIONAL MATCH (s)-[:CONTAINS_SCHEMA]->(sc1:Schema)
-            OPTIONAL MATCH (d)-[:HAS_SCHEMA]->(sc2:Schema)
-            OPTIONAL MATCH (s)-[:CONTAINS_TABLE]->(tb1:Table)
-            OPTIONAL MATCH (d)-[:HAS_TABLE]->(tb2:Table)
-            OPTIONAL MATCH (tb1)<-[:PART_OF]-(tc1:TableChunk)
-            OPTIONAL MATCH (tb2)<-[:PART_OF]-(tc2:TableChunk)
-            OPTIONAL MATCH (s)-[:DESCRIBES]->(e1:Entity)
-            OPTIONAL MATCH (sc1)-[:DEPICTS]->(e2:Entity)
-            OPTIONAL MATCH (sc2)-[:DEPICTS]->(e3:Entity)
-            OPTIONAL MATCH (tb1)-[:MENTIONS]->(e4:Entity)
-            OPTIONAL MATCH (tb2)-[:MENTIONS]->(e5:Entity)
+            
+            CALL {
+                WITH d
+                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->(c:Chapter)
+                RETURN count(DISTINCT c) as chapters
+            }
+            
+            CALL {
+                WITH d
+                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->(s:Section)
+                RETURN count(DISTINCT s) as sections
+            }
+            
+            CALL {
+                WITH d
+                OPTIONAL MATCH (d)-[:HAS_SCHEMA]->(sc1:Schema)
+                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_SCHEMA]->(sc2:Schema)
+                WITH collect(DISTINCT sc1) + collect(DISTINCT sc2) as all_schemas
+                UNWIND all_schemas as sc
+                RETURN count(DISTINCT sc) as schemas
+            }
+            
+            CALL {
+                WITH d
+                OPTIONAL MATCH (d)-[:HAS_TABLE]->(tb1:Table)
+                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_TABLE]->(tb2:Table)
+                WITH collect(DISTINCT tb1) + collect(DISTINCT tb2) as all_tables
+                UNWIND all_tables as tb
+                RETURN count(DISTINCT tb) as tables
+            }
+            
+            CALL {
+                WITH d
+                OPTIONAL MATCH (d)-[:HAS_TABLE]->()<-[:PART_OF]-(tc:TableChunk)
+                RETURN count(DISTINCT tc) as table_chunks
+            }
             
             RETURN 
                 d.id as doc_id,
                 d.title as document_title,
                 d.total_pages as total_pages,
-                count(DISTINCT c) as chapters,
-                count(DISTINCT s) as sections,
-                count(DISTINCT sc1) + count(DISTINCT sc2) as schemas,
-                count(DISTINCT tb1) + count(DISTINCT tb2) as tables,
-                count(DISTINCT tc1) + count(DISTINCT tc2) as table_chunks,
-                count(DISTINCT e1) + count(DISTINCT e2) + count(DISTINCT e3) + 
-                count(DISTINCT e4) + count(DISTINCT e5) as entities
+                chapters,
+                sections,
+                schemas,
+                tables,
+                table_chunks,
+                0 as entities
             """
             result = await self.run_query(query, {"doc_id": doc_id})
         else:

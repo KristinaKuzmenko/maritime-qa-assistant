@@ -17,6 +17,7 @@ from typing import TypedDict, List, Any, Dict, Optional, Literal, Annotated
 from langgraph.graph import StateGraph, END
 import logging
 import operator
+import re
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
@@ -53,58 +54,29 @@ def has_tool_calls(message: AIMessage) -> bool:
 GRAPH_SCHEMA_PROMPT = """
 You work with a Neo4j graph that describes maritime technical documentation.
 
-GRAPH SCHEMA (IMPORTANT):
+GRAPH SCHEMA:
 - (d:Document {id, title})
-  - (d)-[:HAS_CHAPTER]->(c:Chapter {id, title, number})
-  - (c)-[:HAS_SECTION]->(s:Section {id, title, doc_id, page_start, page_end, content})
-  
-- (s:Section)-[:CONTAINS_TABLE]->(t:Table {
-      id, doc_id, page_number, title, caption, rows, cols, file_path, thumbnail_path, csv_path
-  })
-  
-- (tc:TableChunk {id, parent_table_id, chunk_index, text_preview, text_length})-[:PART_OF]->(t:Table)
-
-- (s:Section)-[:CONTAINS_SCHEMA]->(sc:Schema {
-      id, doc_id, page_number, title, caption, file_path, thumbnail_path
-  })
+- (c:Chapter {id, title, number})
+- (s:Section {id, title, doc_id, page_start, page_end, content})
+- (t:Table {id, doc_id, page_number, title, caption, rows, cols, file_path})
+- (sc:Schema {id, doc_id, page_number, title, caption, file_path})
 
 RELATIONSHIPS:
-- Document → Chapter: [:HAS_CHAPTER]
-- Chapter → Section: [:HAS_SECTION]
-- Section → Table: [:CONTAINS_TABLE]
-- Section → Schema: [:CONTAINS_SCHEMA]
-- TableChunk → Table: [:PART_OF]
+- (d)-[:HAS_CHAPTER]->(c)
+- (c)-[:HAS_SECTION]->(s)
+- (s)-[:CONTAINS_TABLE]->(t)
+- (s)-[:CONTAINS_SCHEMA]->(sc)
 
-CRITICAL RULES:
-- Use ONLY read-only Cypher: MATCH, OPTIONAL MATCH, RETURN, WHERE, ORDER BY, LIMIT
-- DO NOT use: CREATE, MERGE, DELETE, REMOVE, SET, DROP, CALL (write procedures)
-- ALWAYS use LIMIT <= 5 in your queries to prevent overload
-- Prefer to:
-  - Get sections by id (section_id) when provided
-  - Get tables/schemas via CONTAINS_TABLE / CONTAINS_SCHEMA relationships
-  - List items by page_number / doc_id when question is about specific page
-- Return only needed fields: id, title, page_number, file_path, caption, doc_id, content
-- If question doesn't need structural graph info, DO NOT call neo4j_query tool
+RETURN FIELD NAMING (IMPORTANT!):
+When returning results, use these EXACT aliases:
+- Table: t.id AS table_id, t.title AS title, t.page_number AS page, t.file_path AS file_path, t.doc_id AS doc_id
+- Schema: sc.id AS schema_id, sc.title AS title, sc.page_number AS page, sc.file_path AS file_path
+- Section: s.id AS section_id, s.title AS title, s.page_start AS page_start, s.page_end AS page_end
 
-EXAMPLE GOOD QUERIES:
-```cypher
-// Get section with its tables
-MATCH (s:Section {id: $section_id})-[:CONTAINS_TABLE]->(t:Table)
-RETURN s, t LIMIT 5
-
-// Find tables on specific page
-MATCH (t:Table {page_number: $page, doc_id: $doc_id})
-RETURN t LIMIT 5
-```
-
-EXAMPLE BAD QUERIES:
-```cypher
-// ❌ NO LIMIT - will return too much data
-MATCH (s:Section) RETURN s
-
-// ❌ LIMIT too high
-MATCH (t:Table) RETURN t LIMIT 100
-```
+RULES:
+- ONLY read queries (MATCH, WHERE, RETURN, ORDER BY, LIMIT)
+- ALWAYS use LIMIT <= 5
+- NO write operations (CREATE, MERGE, DELETE, SET)
 """
 
 
@@ -129,9 +101,9 @@ class GraphState(TypedDict):
     # Anchor sections (selected after Qdrant text search)
     anchor_sections: List[Dict[str, Any]]
     
-    # Tool results (raw)
-    qdrant_results: Dict[str, List[Dict[str, Any]]]  # {text: [...], tables: [...], schemas: [...]}
-    neo4j_results: List[Dict[str, Any]]
+    # Search results from all sources (Qdrant semantic + Neo4j entity/fulltext)
+    search_results: Dict[str, List[Dict[str, Any]]]  # {text: [...], tables: [...], schemas: [...]}
+    neo4j_results: List[Dict[str, Any]]  # Direct Cypher query results
     
     # Entity search results (separate to avoid context pollution)
     entity_results: Optional[Dict[str, Any]]  # {entities: [...], sections: [...], tables: [...], schemas: [...]}
@@ -158,6 +130,78 @@ class ToolContext:
 
 # Create global context (will be set by graph builder)
 tool_ctx = ToolContext()
+
+
+# =============================================================================
+# HELPER: Neo4j Fulltext Search (used by multiple tools)
+# =============================================================================
+
+async def neo4j_fulltext_search(
+    search_term: str, 
+    limit: int = 10, 
+    min_score: float = 0.5,
+    include_content: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    Search sections using Neo4j fulltext index 'sectionSearch'.
+    
+    Args:
+        search_term: Query string (use quotes for exact match: '"PU3" OR "7M2"')
+        limit: Max results
+        min_score: Minimum Lucene score
+        include_content: If True, return full section content (slower but needed for context)
+    
+    Returns:
+        List of sections with section_id, doc_id, title, score, [content]
+    """
+    if not tool_ctx.neo4j_driver:
+        return []
+    
+    try:
+        async with tool_ctx.neo4j_driver.session() as session:
+            # Section nodes have 'id' field, not 'section_id'
+            if include_content:
+                query = """
+                CALL db.index.fulltext.queryNodes('sectionSearch', $search_term)
+                YIELD node, score
+                WHERE score > $min_score
+                RETURN node.id AS section_id,
+                       node.doc_id AS doc_id, 
+                       node.title AS title,
+                       node.content AS content,
+                       node.page_start AS page_start,
+                       node.page_end AS page_end,
+                       score
+                ORDER BY score DESC
+                LIMIT $limit
+                """
+            else:
+                query = """
+                CALL db.index.fulltext.queryNodes('sectionSearch', $search_term)
+                YIELD node, score
+                WHERE score > $min_score
+                RETURN node.id AS section_id,
+                       node.doc_id AS doc_id, 
+                       node.title AS title, 
+                       score
+                ORDER BY score DESC
+                LIMIT $limit
+                """
+            
+            result = await session.run(query, {
+                "search_term": search_term,
+                "min_score": min_score,
+                "limit": limit
+            })
+            data = await result.data()
+            
+            if data:
+                logger.debug(f"neo4j_fulltext_search: found {len(data)} results")
+            return data
+                
+    except Exception as e:
+        logger.error(f"neo4j_fulltext_search failed: {e}")
+        return []
 
 
 @tool
@@ -289,6 +333,7 @@ def qdrant_search_tables(query: str, limit: int = 5) -> List[Dict[str, Any]]:
                 "text_preview": hit.payload.get("text_preview", ""),
                 "rows": hit.payload.get("rows"),
                 "cols": hit.payload.get("cols"),
+                "file_path": hit.payload.get("file_path"),  # Image path for display
             })
         
         logger.info(f"qdrant_search_tables: found {len(hits)} tables")
@@ -446,6 +491,217 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
         
         entity_ids = extraction.get("entity_ids", [])
         
+        # Extract potential equipment codes from query (e.g., PU3, 7M2, P-101, V-205)
+        # Pattern: alphanumeric codes like PU3, 7M2, P-101, TK-102
+        equipment_codes = re.findall(r'\b([A-Z]{1,3}[-]?\d{1,4}[A-Z]?|\d{1,2}[A-Z]{1,3}\d?)\b', query, re.IGNORECASE)
+        equipment_codes = list(dict.fromkeys([code.upper() for code in equipment_codes]))  # Dedupe, preserve order
+        
+        if equipment_codes:
+            logger.info(f"neo4j_entity_search: detected equipment codes in query: {equipment_codes}")
+        
+        # Also search Neo4j for entities matching words in the query
+        # This finds dynamically created entities not in the dictionary
+        query_words = set(re.findall(r'\b\w{3,}\b', query.lower()))
+        # Remove common stop words
+        stop_words = {'the', 'and', 'for', 'are', 'what', 'how', 'when', 'where', 'why', 
+                      'does', 'this', 'that', 'with', 'from', 'have', 'has', 'been', 'will',
+                      'can', 'could', 'would', 'should', 'about', 'which', 'their', 'there'}
+        query_words -= stop_words
+        
+        # Track if we found entities by equipment code specifically
+        found_by_equipment_code = False
+        
+        if query_words or equipment_codes:
+            async with tool_ctx.neo4j_driver.session() as session:
+                # First: Direct search by equipment code (PU3, 7M2, etc.)
+                if equipment_codes:
+                    code_query = """
+                    MATCH (e:Entity)
+                    WHERE e.code IN $codes 
+                       OR ANY(code IN $codes WHERE toUpper(e.name) CONTAINS code)
+                    RETURN e.code AS code, e.name AS name
+                    LIMIT 10
+                    """
+                    result = await session.run(code_query, {"codes": equipment_codes})
+                    code_entities = await result.data()
+                    logger.info(f"neo4j_entity_search: code search returned {len(code_entities)} entities")
+                    
+                    for ent in code_entities:
+                        if ent["code"] and ent["code"] not in entity_ids:
+                            entity_ids.append(ent["code"])
+                            found_by_equipment_code = True
+                            logger.info(f"Found entity by code from Neo4j: {ent['name']} ({ent['code']})")
+                    
+                    # If equipment codes detected but NOT found as entities, do fulltext search
+                    if not found_by_equipment_code:
+                        logger.info(f"neo4j_entity_search: equipment codes {equipment_codes} not in Entity graph, using fulltext")
+                        
+                        # Try multiple search variations for equipment codes
+                        # 1. Exact match with quotes: "CP-1"
+                        # 2. Without hyphen: CP1
+                        # 3. Fuzzy: CP~1
+                        search_variations = []
+                        for code in equipment_codes:
+                            search_variations.append(f'"{code}"')  # Exact
+                            # Also try without hyphen if present
+                            if '-' in code:
+                                search_variations.append(f'"{code.replace("-", "")}"')
+                        
+                        search_term = " OR ".join(search_variations)
+                        logger.info(f"neo4j_entity_search: fulltext search term: {search_term}")
+                        sections_data = await neo4j_fulltext_search(search_term, limit=10, min_score=0.3, include_content=True)
+                        
+                        if sections_data:
+                            logger.info(f"neo4j_entity_search: fulltext found {len(sections_data)} sections for codes {equipment_codes}")
+                            
+                            # Extract section IDs to find related tables/schemas
+                            section_ids = [s["section_id"] for s in sections_data if s.get("section_id")]
+                            doc_ids = list(set(s["doc_id"] for s in sections_data if s.get("doc_id")))
+                            
+                            logger.info(f"neo4j_entity_search: section_ids={section_ids}, doc_ids={doc_ids}")
+                            logger.info(f"neo4j_entity_search: include_tables={include_tables}, include_schemas={include_schemas}")
+                            
+                            fulltext_tables = []
+                            fulltext_schemas = []
+                            
+                            # Query for tables and schemas in these sections OR matching equipment code in llm_summary
+                            if section_ids or equipment_codes:
+                                # Tables: in section OR mentioned in llm_summary/text_preview
+                                if include_tables:
+                                    table_query = """
+                                    MATCH (t:Table)
+                                    WHERE t.doc_id IN $doc_ids
+                                      AND (
+                                        EXISTS { MATCH (s:Section)-[:CONTAINS_TABLE]->(t) WHERE s.id IN $section_ids }
+                                        OR ANY(code IN $codes WHERE 
+                                            toUpper(t.text_preview) CONTAINS code 
+                                            OR toUpper(t.caption) CONTAINS code
+                                            OR toUpper(t.title) CONTAINS code
+                                        )
+                                      )
+                                    RETURN DISTINCT
+                                        t.id AS table_id,
+                                        t.title AS table_title,
+                                        t.caption AS caption,
+                                        t.text_preview AS text_preview,
+                                        t.page_number AS page,
+                                        t.file_path AS file_path,
+                                        t.doc_id AS doc_id
+                                    LIMIT 5
+                                    """
+                                    result = await session.run(table_query, {
+                                        "section_ids": section_ids,
+                                        "doc_ids": doc_ids,
+                                        "codes": equipment_codes
+                                    })
+                                    fulltext_tables = await result.data()
+                                    logger.info(f"neo4j_entity_search: found {len(fulltext_tables)} tables related to sections/codes")
+                                
+                                # Schemas: in section OR matching equipment code in llm_summary
+                                schema_query = """
+                                MATCH (sc:Schema)
+                                WHERE sc.doc_id IN $doc_ids
+                                  AND (
+                                    EXISTS { MATCH (s:Section)-[:CONTAINS_SCHEMA]->(sc) WHERE s.id IN $section_ids }
+                                    OR ANY(code IN $codes WHERE 
+                                        toUpper(sc.llm_summary) CONTAINS code
+                                        OR toUpper(sc.caption) CONTAINS code
+                                        OR toUpper(sc.title) CONTAINS code
+                                    )
+                                  )
+                                RETURN DISTINCT
+                                    sc.id AS schema_id,
+                                    sc.title AS title,
+                                    sc.caption AS caption,
+                                    sc.llm_summary AS llm_summary,
+                                    sc.page_number AS page,
+                                    sc.file_path AS file_path,
+                                    sc.thumbnail_path AS thumbnail_path,
+                                    sc.doc_id AS doc_id
+                                LIMIT 5
+                                """
+                                result = await session.run(schema_query, {
+                                    "section_ids": section_ids,
+                                    "doc_ids": doc_ids,
+                                    "codes": equipment_codes
+                                })
+                                fulltext_schemas = await result.data()
+                                logger.info(f"neo4j_entity_search: found {len(fulltext_schemas)} schemas related to sections/codes")
+                            
+                            return {
+                                "entities": equipment_codes,
+                                "entity_names": [f"Equipment {code}" for code in equipment_codes],
+                                "sections": [
+                                    {
+                                        "section_id": s["section_id"],
+                                        "doc_id": s["doc_id"],
+                                        "section_title": s.get("title", ""),
+                                        "content": s.get("content", ""),
+                                        "page_start": s.get("page_start"),
+                                        "page_end": s.get("page_end"),
+                                        "score": s["score"],
+                                        "matched_entity": equipment_codes[0] if equipment_codes else None,
+                                    }
+                                    for s in sections_data
+                                ],
+                                "tables": [
+                                    {
+                                        "table_id": t["table_id"],
+                                        "table_title": t.get("table_title", ""),
+                                        "caption": t.get("caption", ""),
+                                        "text_preview": t.get("text_preview", ""),
+                                        "page": t.get("page"),
+                                        "file_path": t.get("file_path"),
+                                        "doc_id": t.get("doc_id"),
+                                        "matched_entity": equipment_codes[0] if equipment_codes else None,
+                                    }
+                                    for t in fulltext_tables
+                                ],
+                                "schemas": [
+                                    {
+                                        "schema_id": sc["schema_id"],
+                                        "title": sc.get("title", ""),
+                                        "caption": sc.get("caption", ""),
+                                        "llm_summary": sc.get("llm_summary", ""),
+                                        "page": sc.get("page"),
+                                        "file_path": sc.get("file_path"),
+                                        "thumbnail_path": sc.get("thumbnail_path"),
+                                        "doc_id": sc.get("doc_id"),
+                                        "matched_entity": equipment_codes[0] if equipment_codes else None,
+                                    }
+                                    for sc in fulltext_schemas
+                                ],
+                                "message": f"Found via fulltext search for equipment codes: {equipment_codes}"
+                            }
+                        else:
+                            # Fulltext also failed - return special message to trigger Qdrant fallback
+                            logger.info(f"neo4j_entity_search: fulltext found nothing for {equipment_codes}, suggesting semantic search")
+                            return {
+                                "entities": equipment_codes,
+                                "entity_names": [f"Equipment {code}" for code in equipment_codes],
+                                "sections": [],
+                                "tables": [],
+                                "schemas": [],
+                                "message": f"Equipment codes {equipment_codes} not found in graph or fulltext. Try qdrant_search_text or qdrant_search_tables for semantic search.",
+                                "suggest_semantic_search": True
+                            }
+                
+                # Second: Search by name words (only if no equipment codes or codes were found)
+                if query_words and not equipment_codes:
+                    neo4j_entity_query = """
+                    MATCH (e:Entity)
+                    WHERE ANY(word IN $words WHERE toLower(e.name) CONTAINS word)
+                    RETURN e.code AS code, e.name AS name
+                    LIMIT 10
+                    """
+                    result = await session.run(neo4j_entity_query, {"words": list(query_words)})
+                    neo4j_entities = await result.data()
+                    
+                    for ent in neo4j_entities:
+                        if ent["code"] and ent["code"] not in entity_ids:
+                            entity_ids.append(ent["code"])
+                            logger.debug(f"Found entity from Neo4j by name: {ent['name']} ({ent['code']})")
+        
         if not entity_ids:
             logger.info(f"neo4j_entity_search: no entities found in query '{query}'")
             return {
@@ -465,16 +721,8 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
             f"expanded to {len(expanded_ids)}: {expanded_ids[:5]}..."
         )
         
-        # Build filters for Qdrant/Neo4j
-        filter_conditions = []
-        if tool_ctx.owner:
-            filter_conditions.append(
-                FieldCondition(key="owner", match=MatchValue(value=tool_ctx.owner))
-            )
-        if tool_ctx.doc_ids:
-            filter_conditions.append(
-                FieldCondition(key="doc_id", match=MatchAny(any=tool_ctx.doc_ids))
-            )
+        # Get doc_ids filter for Neo4j queries
+        doc_ids_filter = tool_ctx.doc_ids if tool_ctx.doc_ids else None
         
         results = {
             "entities": expanded_ids,
@@ -488,9 +736,11 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
         # Note: Section.content stores full text, no need to fetch from Qdrant
         async with tool_ctx.neo4j_driver.session() as session:
             # Find sections via DESCRIBES relationship - include content!
+            # Add doc_ids filter if specified
             section_query = """
             UNWIND $entity_ids AS eid
             MATCH (e:Entity {code: eid})<-[:DESCRIBES]-(s:Section)
+            WHERE $doc_ids IS NULL OR s.doc_id IN $doc_ids
             OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
             RETURN DISTINCT 
                 s.id AS section_id,
@@ -504,7 +754,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 e.name AS entity_name
             LIMIT 10
             """
-            result = await session.run(section_query, {"entity_ids": expanded_ids})
+            result = await session.run(section_query, {"entity_ids": expanded_ids, "doc_ids": doc_ids_filter})
             section_records = await result.data()
             
             results["sections"] = [
@@ -526,6 +776,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 table_query = """
                 UNWIND $entity_ids AS eid
                 MATCH (e:Entity {code: eid})<-[:MENTIONS]-(t:Table)
+                WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
                 OPTIONAL MATCH (d:Document)-[:HAS_TABLE]->(t)
                 OPTIONAL MATCH (tc:TableChunk)-[:PART_OF]->(t)
                 WITH e, t, d, collect(tc.text_preview) AS chunk_previews
@@ -538,6 +789,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                     t.rows AS rows,
                     t.cols AS cols,
                     t.csv_path AS csv_path,
+                    t.file_path AS file_path,
                     t.doc_id AS doc_id,
                     d.title AS doc_title,
                     e.code AS entity_code,
@@ -545,7 +797,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                     chunk_previews
                 LIMIT 10
                 """
-                result = await session.run(table_query, {"entity_ids": expanded_ids})
+                result = await session.run(table_query, {"entity_ids": expanded_ids, "doc_ids": doc_ids_filter})
                 table_records = await result.data()
                 
                 results["tables"] = [
@@ -559,6 +811,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                         "rows": r["rows"],
                         "cols": r["cols"],
                         "csv_path": r["csv_path"],
+                        "file_path": r["file_path"],
                         "doc_id": r["doc_id"],
                         "doc_title": r["doc_title"],
                         "matched_entity": r["entity_name"],
@@ -571,6 +824,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 schema_query = """
                 UNWIND $entity_ids AS eid
                 MATCH (e:Entity {code: eid})<-[:DEPICTS]-(sc:Schema)
+                WHERE $doc_ids IS NULL OR sc.doc_id IN $doc_ids
                 OPTIONAL MATCH (d:Document)-[:HAS_SCHEMA]->(sc)
                 RETURN DISTINCT 
                     sc.id AS schema_id,
@@ -587,7 +841,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                     e.name AS entity_name
                 LIMIT 5
                 """
-                result = await session.run(schema_query, {"entity_ids": expanded_ids})
+                result = await session.run(schema_query, {"entity_ids": expanded_ids, "doc_ids": doc_ids_filter})
                 schema_records = await result.data()
                 
                 results["schemas"] = [
@@ -648,15 +902,20 @@ def node_analyze_question(state: GraphState) -> GraphState:
 
 Categories:
 - "text" - seeking textual information, procedures, explanations, descriptions
-- "table" - seeking tabular data, specifications, parameters, technical values
-- "schema" - seeking diagrams, schematics, figures, drawings, visual representations
+- "table" - seeking tabular data, specifications, parameters, technical values in TABLE format
+- "schema" - seeking diagrams, schematics, figures, DRAWINGS, visual representations, layout images
 - "mixed" - needs both semantic search AND graph traversal (e.g., "find all X in section Y", structural queries)
+
+IMPORTANT: If question mentions "drawing", "drawings", "diagram", "scheme", "figure", "layout" → classify as "schema"
+These words indicate user wants VISUAL content, even if they ask about dimensions/configuration shown in drawings.
 
 Examples:
 - "How does the fuel system work?" → text
 - "What are the engine specifications?" → table
 - "Show me the water heater diagram" → schema
 - "Give me the scheme of cooling system" → schema
+- "What does the control panel look like according to drawings?" → schema
+- "Dimensions of CP-1 from final drawings" → schema (user wants the DRAWING showing dimensions)
 - "List all tables in chapter 3" → mixed
 - "Find sections about safety on page 5" → mixed
 
@@ -701,53 +960,51 @@ def node_router_agent(state: GraphState) -> GraphState:
     # Build system prompt with intent guidance
     system_prompt = f"""{GRAPH_SCHEMA_PROMPT}
 
-You are a routing agent for maritime technical documentation system.
-Your job: decide which tools to call to answer the user's question.
+You are a routing agent for maritime technical documentation Q&A system.
+Select the best tools to answer the user's question.
 
-USER'S QUESTION INTENT: {intent}
+DETECTED INTENT: {intent}
 
-TOOL SELECTION STRATEGY:
+INTENT-BASED PARAMETER SELECTION:
+When using neo4j_entity_search, set include_tables and include_schemas based on intent:
+- intent="text" → include_tables=False, include_schemas=False (only sections)
+- intent="table" → include_tables=True, include_schemas=False
+- intent="schema" → include_tables=False, include_schemas=True
+- intent="mixed" → include_tables=True, include_schemas=True
 
-1. FOR SEMANTIC/CONTENT QUESTIONS (what, how, why, explain):
-   - Use qdrant_search_text for general information, procedures, explanations
-   - Use qdrant_search_tables for specifications, parameters, technical data
-   - Use qdrant_search_schemas for diagrams, schematics, figures
+TOOL SELECTION GUIDE:
 
-2. FOR ENTITY-FOCUSED QUESTIONS (neo4j_entity_search):
-   ✅ USE neo4j_entity_search ONLY when question asks about:
-      - SPECIFIC COMPONENTS: "fuel oil pump", "cooling water valve", "ballast tank"
-      - EQUIPMENT CODES: "P-101", "V-205", "TK-102"
-      - RELATIONSHIPS between entities: "what pumps connect to tank X"
-      - COMPONENT LISTS in a system: "list all valves in FO system"
-   
-   ❌ DO NOT use neo4j_entity_search for:
-      - General questions: "What is SOLAS?", "Explain maintenance procedures"
-      - System overviews: "How does fuel oil system work?" (use qdrant_search_text)
-      - Abbreviation definitions: "What does FO mean?"
-      - Procedures without specific components: "How to start the engine?"
-   
-   Examples:
-   - "What pumps are in the fuel oil system?" → neo4j_entity_search ✅ (specific component type)
-   - "Show P-101 specifications" → neo4j_entity_search ✅ (equipment code)
-   - "How does the fuel oil system work?" → qdrant_search_text ✅ (general, no specific component)
-   - "FO system diagram" → qdrant_search_schemas ✅ (diagram search, not entity relations)
+1. **neo4j_query** - For STRUCTURAL queries by section/chapter NUMBER:
+   Use when question references a SPECIFIC section NUMBER like "section 4.4", "chapter 3"
+   Examples: "tables from section 4.4", "content of chapter 3.2", "all tables in section 5.1"
+   → Query Section by title containing the number, then find related Tables/Schemas
 
-3. FOR STRUCTURAL/NAVIGATIONAL QUESTIONS (where, which section, on page X):
-   - Use neo4j_query to traverse document structure
-   - Example: "What tables are in section 4.2?" → neo4j_query
-   - Example: "Show me schemas on page 15" → neo4j_query
-   - IMPORTANT: Always use LIMIT <= 5 in Neo4j queries
+2. **neo4j_entity_search** - When question has EQUIPMENT CODE (alphanumeric tag):
+   Codes are SHORT like: 7M2, P-101, V-205, PU3, TK-102, CP-1
+   Examples: "pump (7M2)", "valve V-205", "function of PU3", "CP-1 drawings"
+   DO NOT use for equipment NAMES without codes: "fuel pump", "main engine"
+   IMPORTANT: Set include_tables/include_schemas based on DETECTED INTENT above!
 
-4. COMBINING TOOLS:
-   - For complex questions, combine semantic + entity search
-   - Example: "Find fuel oil pump maintenance schedule" 
-     → neo4j_entity_search (find pump-related content) + qdrant_search_text (maintenance info)
+3. **qdrant_search_text** - DEFAULT for general questions:
+   Descriptions, procedures, explanations, named equipment without codes
+   Examples: "How does X work", "What is cooling system", "explain fuel pump"
 
-CURRENT QUESTION: "{question}"{anchor_info}
+4. **qdrant_search_tables** - For specs/parameters:
+   Temperatures, pressures, specifications → combine with qdrant_search_text
 
-Based on the question and intent, decide which tools to call.
-Prefer qdrant_search_* for most questions. Use neo4j_entity_search only when specifically justified.
-"""
+5. **qdrant_search_schemas** - For diagrams:
+   "Show diagram", "Where is X located"
+
+DECISION:
+- Section NUMBER (4.4, 3.2)? → neo4j_query
+- Equipment CODE (7M2, P-101)? → neo4j_entity_search  
+- Specs/temperatures? → qdrant_search_tables + text
+- General? → qdrant_search_text
+
+QUESTION: "{question}"
+INTENT: {intent}{anchor_info}
+
+Select tool(s). Schema is in GRAPH_SCHEMA_PROMPT above."""
     
     # Create LLM with tools
     llm = ChatOpenAI(
@@ -801,6 +1058,10 @@ async def node_execute_tools(state: GraphState) -> GraphState:
     Execute tools called by agent.
     Collects results from Qdrant and Neo4j.
     """
+    # Set filters from state into tool context (for Qdrant/Neo4j queries)
+    tool_ctx.owner = state.get("owner")
+    tool_ctx.doc_ids = state.get("doc_ids")
+    
     messages = state["messages"]
     last_message = messages[-1]
     
@@ -809,13 +1070,13 @@ async def node_execute_tools(state: GraphState) -> GraphState:
     
     if not tool_calls:
         logger.warning("No tool calls from agent")
-        state["qdrant_results"] = {"text": [], "tables": [], "schemas": []}
+        state["search_results"] = {"text": [], "tables": [], "schemas": []}
         state["neo4j_results"] = []
         state["anchor_sections"] = []
         return state
     
     # Execute each tool call
-    qdrant_results = {"text": [], "tables": [], "schemas": []}
+    search_results = {"text": [], "tables": [], "schemas": []}
     neo4j_results = []
     
     tool_messages = []
@@ -831,7 +1092,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
         try:
             if tool_name == "qdrant_search_text":
                 result = qdrant_search_text.invoke(tool_args)
-                qdrant_results["text"].extend(result)
+                search_results["text"].extend(result)
                 logger.info(f"   ✅ qdrant_search_text: found {len(result)} text chunks")
                 tool_messages.append(
                     ToolMessage(
@@ -843,7 +1104,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
             
             elif tool_name == "qdrant_search_tables":
                 result = qdrant_search_tables.invoke(tool_args)
-                qdrant_results["tables"].extend(result)
+                search_results["tables"].extend(result)
                 logger.info(f"   ✅ qdrant_search_tables: found {len(result)} tables")
                 tool_messages.append(
                     ToolMessage(
@@ -855,7 +1116,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
             
             elif tool_name == "qdrant_search_schemas":
                 result = qdrant_search_schemas.invoke(tool_args)
-                qdrant_results["schemas"].extend(result)
+                search_results["schemas"].extend(result)
                 logger.info(f"   ✅ qdrant_search_schemas: found {len(result)} schemas")
                 tool_messages.append(
                     ToolMessage(
@@ -894,7 +1155,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                 for sec in entity_sections:
                     content = sec.get("content", "")
                     if content:
-                        qdrant_results["text"].append({
+                        search_results["text"].append({
                             "type": "text_chunk",
                             "score": 0.85,  # High score for entity match
                             "section_id": sec.get("section_id"),
@@ -922,7 +1183,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                         chunks_text = "\n---\n".join(chunk_previews[:3])
                         combined_preview = f"{text_preview}\n\nTable content:\n{chunks_text}"
                     
-                    qdrant_results["tables"].append({
+                    search_results["tables"].append({
                         "type": "table_chunk",
                         "score": 0.85,
                         "table_id": tbl.get("table_id"),
@@ -935,13 +1196,14 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                         "table_caption": tbl.get("caption", ""),
                         "text_preview": combined_preview,  # Now includes actual content!
                         "csv_path": tbl.get("csv_path"),
+                        "file_path": tbl.get("file_path"),  # Image path for display!
                         "source": "entity_search",
                         "matched_entity": tbl.get("matched_entity"),
                     })
                 
                 # Add entity-matched schemas with text_context and llm_summary
                 for sch in entity_schemas:
-                    qdrant_results["schemas"].append({
+                    search_results["schemas"].append({
                         "type": "schema",
                         "score": 0.85,
                         "schema_id": sch.get("schema_id"),
@@ -964,6 +1226,23 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                 logger.info(f"      Extracted entities: {entities_ids[:5]}{'...' if len(entities_ids) > 5 else ''}")
                 logger.info(f"      Entity names: {entities_found}")
                 logger.info(f"      Found: {len(entity_sections)} sections, {len(entity_tables)} tables, {len(entity_schemas)} schemas")
+                
+                # If entity search suggests semantic search (equipment code not found anywhere)
+                # Automatically trigger Qdrant fallback
+                if result.get("suggest_semantic_search") and not entity_sections and not entity_tables:
+                    logger.info(f"   🔄 Entity search suggests semantic fallback, running qdrant_search_text + qdrant_search_tables")
+                    question = state["question"]
+                    
+                    # Run Qdrant text search
+                    text_fallback = qdrant_search_text.invoke({"query": question, "limit": 10})
+                    search_results["text"].extend(text_fallback)
+                    logger.info(f"      Qdrant text fallback: {len(text_fallback)} chunks")
+                    
+                    # Run Qdrant table search (since intent was TABLE)
+                    table_fallback = qdrant_search_tables.invoke({"query": question, "limit": 5})
+                    search_results["tables"].extend(table_fallback)
+                    logger.info(f"      Qdrant table fallback: {len(table_fallback)} tables")
+                
                 tool_messages.append(
                     ToolMessage(
                         content=f"Entity search found: {len(entity_sections)} sections, {len(entity_tables)} tables, {len(entity_schemas)} schemas for entities: {entities_found}",
@@ -982,101 +1261,96 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                 )
             )
     
-    state["qdrant_results"] = qdrant_results
+    state["search_results"] = search_results
     state["neo4j_results"] = neo4j_results
     state["messages"].extend(tool_messages)
     
     # Log summary of collected context
     logger.info(f"\n📊 TOOL EXECUTION SUMMARY:")
-    logger.info(f"   Text chunks: {len(qdrant_results['text'])}")
-    logger.info(f"   Tables: {len(qdrant_results['tables'])}")
-    logger.info(f"   Schemas: {len(qdrant_results['schemas'])}")
+    logger.info(f"   Text chunks: {len(search_results['text'])}")
+    logger.info(f"   Tables: {len(search_results['tables'])}")
+    logger.info(f"   Schemas: {len(search_results['schemas'])}")
     logger.info(f"   Neo4j records: {len(neo4j_results)}")
     
     # FALLBACK: Neo4j fulltext search if Qdrant results are poor
-    text_results = qdrant_results.get("text", [])
+    text_results = search_results.get("text", [])
     high_quality_results = [r for r in text_results if r.get("score", 0) > 0.3]
     
     if len(high_quality_results) < 2 and state["query_intent"] in ["text", "mixed"]:
-        logger.info(f"⚠️  Poor Qdrant results ({len(high_quality_results)} with score > 0.3), trying Neo4j fulltext fallback")
+        logger.info(f"⚠️  Poor results ({len(high_quality_results)} with score > 0.3), trying Neo4j fulltext fallback")
         
         try:
-            # Use Neo4j fulltext to find relevant section_ids
+            # Use shared fulltext search function
             query = state["question"]
-            cypher = """
-            CALL db.index.fulltext.queryNodes('sectionSearch', $query) 
-            YIELD node, score
-            WHERE node:Section AND score > 0.5
-            RETURN node.id AS section_id,
-                   node.title AS section_title,
-                   node.page_start AS page,
-                   node.doc_id AS doc_id,
-                   score
-            ORDER BY score DESC
-            LIMIT 3
-            """
+            fulltext_results = await neo4j_fulltext_search(query, limit=3, min_score=0.5)
             
-            async with tool_ctx.neo4j_driver.session() as session:
-                result = await session.run(cypher, {"query": query})
-                fulltext_results = await result.data()
+            if fulltext_results:
+                logger.info(f"✅ Neo4j fulltext found {len(fulltext_results)} sections")
                 
-                if fulltext_results:
-                    logger.info(f"✅ Neo4j fulltext found {len(fulltext_results)} sections")
+                # Fetch chunks from Qdrant for these sections
+                for ft_result in fulltext_results:
+                    section_id = ft_result.get("section_id")
+                    if not section_id:
+                        continue
                     
-                    # Fetch chunks from Qdrant for these sections
-                    for ft_result in fulltext_results:
-                        section_id = ft_result["section_id"]
-                        
-                        # Get all chunks for this section from Qdrant
-                        search_filter = Filter(
-                            must=[
-                                FieldCondition(key="section_id", match=MatchValue(value=section_id))
-                            ]
-                        )
-                        
-                        chunks = tool_ctx.qdrant_client.scroll(
-                            collection_name=settings.text_chunks_collection,
-                            scroll_filter=search_filter,
-                            limit=10,
-                            with_payload=True,
-                            with_vectors=False,
-                        )
-                        
-                        # Add chunks to text_results
-                        for point in chunks[0]:
-                            qdrant_results["text"].append({
-                                "type": "text_chunk",
-                                "score": float(ft_result["score"]),  # Use Neo4j fulltext score
-                                "section_id": point.payload.get("section_id"),
-                                "doc_id": point.payload.get("doc_id"),
-                                "section_title": point.payload.get("section_title", ""),
-                                "page_start": point.payload.get("page_start"),
-                                "page_end": point.payload.get("page_end"),
-                                "text": point.payload.get("text", ""),
-                                "text_preview": point.payload.get("text_preview", ""),
-                                "chunk_index": point.payload.get("chunk_index", 0),
-                                "source": "neo4j_fulltext_fallback"
-                            })
+                    # Get all chunks for this section from Qdrant
+                    search_filter = Filter(
+                        must=[
+                            FieldCondition(key="section_id", match=MatchValue(value=section_id))
+                        ]
+                    )
                     
-                    logger.info(f"Added {len(qdrant_results['text']) - len(text_results)} chunks from fulltext sections")
-                else:
-                    logger.info("Neo4j fulltext: no results")
+                    chunks = tool_ctx.qdrant_client.scroll(
+                        collection_name=settings.text_chunks_collection,
+                        scroll_filter=search_filter,
+                        limit=10,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
                     
+                    # Add chunks to text_results
+                    for point in chunks[0]:
+                        search_results["text"].append({
+                            "type": "text_chunk",
+                            "score": float(ft_result["score"]),  # Use Neo4j fulltext score
+                            "section_id": point.payload.get("section_id"),
+                            "doc_id": point.payload.get("doc_id"),
+                            "section_title": point.payload.get("section_title", ""),
+                            "page_start": point.payload.get("page_start"),
+                            "page_end": point.payload.get("page_end"),
+                            "text": point.payload.get("text", ""),
+                            "text_preview": point.payload.get("text_preview", ""),
+                            "chunk_index": point.payload.get("chunk_index", 0),
+                            "source": "neo4j_fulltext_fallback"
+                        })
+                
+                logger.info(f"Added {len(search_results['text']) - len(text_results)} chunks from fulltext sections")
+            else:
+                logger.info("Neo4j fulltext: no results")
+                
         except Exception as e:
             logger.error(f"Neo4j fulltext fallback failed: {e}")
     
-    # SELECT ANCHOR SECTIONS
+    # SELECT ANCHOR SECTIONS with importance scores
+    # First, collect unique section_ids
+    text_hits = search_results.get("text", [])
+    section_ids = list({h.get("section_id") for h in text_hits if h.get("section_id")})
+    
+    # Fetch importance scores from Neo4j
+    importance_scores = await _fetch_importance_scores(section_ids)
+    
     anchor_sections = _select_anchor_sections(
-        qdrant_results.get("text", []),
-        max_sections=5  # Increased to 5 for better coverage
+        text_hits,
+        max_sections=5,
+        importance_scores=importance_scores
     )
     state["anchor_sections"] = anchor_sections
     
     logger.info(
         f"Tools executed: "
-        f"text={len(qdrant_results['text'])}, "
-        f"tables={len(qdrant_results['tables'])}, "
-        f"schemas={len(qdrant_results['schemas'])}, "
+        f"text={len(search_results['text'])}, "
+        f"tables={len(search_results['tables'])}, "
+        f"schemas={len(search_results['schemas'])}, "
         f"neo4j={len(neo4j_results)}, "
         f"anchors={len(anchor_sections)}"
     )
@@ -1084,12 +1358,18 @@ async def node_execute_tools(state: GraphState) -> GraphState:
     return state
 
 
-def _select_anchor_sections(text_hits: List[Dict[str, Any]], max_sections: int = 3) -> List[Dict[str, Any]]:
+def _select_anchor_sections(text_hits: List[Dict[str, Any]], max_sections: int = 3, importance_scores: Dict[str, float] = None) -> List[Dict[str, Any]]:
     """
-    Select top anchor sections based on best score per section.
+    Select top anchor sections based on combined score.
+    
+    Final score = similarity * 0.7 + importance * 0.2
+    (remaining 0.1 reserved for future factors like recency)
+    
     Groups text chunks by (doc_id, section_id) and picks top N sections.
     """
     from collections import defaultdict
+    
+    importance_scores = importance_scores or {}
     
     groups = defaultdict(list)
     for h in text_hits:
@@ -1098,15 +1378,24 @@ def _select_anchor_sections(text_hits: List[Dict[str, Any]], max_sections: int =
     
     scored = []
     for (doc_id, section_id), hits in groups.items():
-        # Take max score among hits in this section
-        best_score = max(h.get("score", 0) for h in hits)
+        # Take max similarity score among hits in this section
+        similarity = max(h.get("score", 0) for h in hits)
+        
+        # Get importance score from Neo4j (default 0.5)
+        importance = importance_scores.get(section_id, 0.5)
+        
+        # Combined score: similarity * 0.7 + importance * 0.2
+        final_score = similarity * 0.7 + importance * 0.2
+        
         scored.append({
             "doc_id": doc_id,
             "section_id": section_id,
-            "score": best_score,
+            "score": final_score,
+            "similarity": similarity,
+            "importance": importance,
         })
     
-    # Sort by score and take top N
+    # Sort by final score and take top N
     scored.sort(key=lambda x: x["score"], reverse=True)
     
     selected = scored[:max_sections]
@@ -1115,6 +1404,29 @@ def _select_anchor_sections(text_hits: List[Dict[str, Any]], max_sections: int =
     
     return selected
 
+
+async def _fetch_importance_scores(section_ids: List[str]) -> Dict[str, float]:
+    """Fetch importance_score for sections from Neo4j."""
+    if not section_ids or not tool_ctx.neo4j_driver:
+        return {}
+    
+    try:
+        async with tool_ctx.neo4j_driver.session() as session:
+            query = """
+            MATCH (s:Section)
+            WHERE s.id IN $section_ids
+            RETURN s.id AS section_id, s.importance_score AS importance
+            """
+            result = await session.run(query, {"section_ids": section_ids})
+            data = await result.data()
+            
+            return {
+                r["section_id"]: r.get("importance") or 0.5 
+                for r in data
+            }
+    except Exception as e:
+        logger.warning(f"Failed to fetch importance scores: {e}")
+        return {}
 
 
 # NODE 4: CONTEXT BUILDER (WITH NEIGHBOR EXPANSION)
@@ -1134,7 +1446,7 @@ async def node_build_context(
     5. Deduplicate and sort by relevance
     6. Apply HARD LIMITS: max 3 sections, 3 tables, 3 schemas
     """
-    qdrant_results = state["qdrant_results"]
+    search_results = state["search_results"]
     neo4j_results = state["neo4j_results"]
     anchors = state.get("anchor_sections", [])
     
@@ -1143,12 +1455,23 @@ async def node_build_context(
     anchor_doc_ids = {a["doc_id"] for a in anchors}
     anchor_section_ids = {a["section_id"] for a in anchors}
     
-    logger.info(f"Anchor filtering: {len(anchor_keys)} sections, {len(anchor_doc_ids)} docs")
+    # Determine PRIMARY document (most anchor sections or highest total score)
+    # Tables/schemas should primarily come from this doc to avoid context pollution
+    from collections import Counter
+    doc_scores = Counter()
+    for a in anchors:
+        doc_id = a.get("doc_id")
+        if doc_id:
+            doc_scores[doc_id] += a.get("score", 0.5)  # Sum scores per doc
+    
+    primary_doc_id = doc_scores.most_common(1)[0][0] if doc_scores else None
+    
+    logger.info(f"Anchor filtering: {len(anchor_keys)} sections, {len(anchor_doc_ids)} docs, primary_doc={primary_doc_id}")
     
     enriched = []
     
-    # Process Qdrant text chunks (ONLY from anchor sections)
-    text_hits = qdrant_results.get("text", [])
+    # Process text chunks (ONLY from anchor sections)
+    text_hits = search_results.get("text", [])
     for hit in text_hits:
         key = (hit.get("doc_id"), hit.get("section_id"))
         if key not in anchor_keys:
@@ -1159,9 +1482,14 @@ async def node_build_context(
         if item:
             enriched.append(item)
     
-    # Process Qdrant tables (ONLY from anchor docs)
-    for hit in qdrant_results.get("tables", []):
-        if hit.get("doc_id") not in anchor_doc_ids:
+    # Process tables (ONLY from PRIMARY doc to avoid context pollution)
+    for hit in search_results.get("tables", []):
+        hit_doc_id = hit.get("doc_id")
+        # Strict: only from primary doc; fallback to any anchor doc if no primary
+        if primary_doc_id and hit_doc_id != primary_doc_id:
+            logger.debug(f"Skipping table - not from primary doc: {hit.get('table_id')} (doc={hit_doc_id})")
+            continue
+        elif not primary_doc_id and hit_doc_id not in anchor_doc_ids:
             logger.debug(f"Skipping table - not in anchor docs: {hit.get('table_id')}")
             continue
         
@@ -1169,13 +1497,15 @@ async def node_build_context(
         if item:
             enriched.append(item)
     
-    # Process Qdrant schemas
-    # If no anchor sections (schema-only query), process all schemas
-    # Otherwise filter by anchor docs/sections
-    for hit in qdrant_results.get("schemas", []):
-        if anchor_doc_ids:  # Only filter if anchors exist
+    # Process schemas (ONLY from PRIMARY doc)
+    for hit in search_results.get("schemas", []):
+        hit_doc_id = hit.get("doc_id")
+        if primary_doc_id and hit_doc_id != primary_doc_id:
+            logger.debug(f"Skipping schema - not from primary doc: {hit.get('schema_id')} (doc={hit_doc_id})")
+            continue
+        elif not primary_doc_id and anchor_doc_ids:
             if (hit.get("section_id") not in anchor_section_ids and 
-                hit.get("doc_id") not in anchor_doc_ids):
+                hit_doc_id not in anchor_doc_ids):
                 logger.debug(f"Skipping schema - not in anchor docs/sections: {hit.get('schema_id')}")
                 continue
         
@@ -1183,27 +1513,34 @@ async def node_build_context(
         if item:
             enriched.append(item)
     
-    # Process Neo4j results (filter by anchor docs/sections)
+    # Process Neo4j results (direct Cypher query results)
+    # These are HIGH PRIORITY - user explicitly asked for this data via structured query
+    # Skip anchor filtering if anchors are empty (means no text search was done)
+    skip_anchor_filter = len(anchor_doc_ids) == 0 and len(anchor_section_ids) == 0
+    
     for record in neo4j_results:
         if "error" in record:
             continue
         
-        # Check if record is from anchor docs/sections
-        rec_doc_id = record.get("doc_id")
-        rec_section_id = record.get("section_id")
-        
-        if rec_doc_id not in anchor_doc_ids and rec_section_id not in anchor_section_ids:
-            logger.debug(f"Skipping Neo4j record - not in anchor scope")
-            continue
+        # Check if record is from anchor docs/sections (unless anchors are empty)
+        if not skip_anchor_filter:
+            rec_doc_id = record.get("doc_id")
+            rec_section_id = record.get("section_id")
+            
+            if rec_doc_id not in anchor_doc_ids and rec_section_id not in anchor_section_ids:
+                logger.debug(f"Skipping Neo4j record - not in anchor scope")
+                continue
         
         # Try to identify type from record
-        if "section_id" in record or "content" in record:
-            item = await _neo4j_record_to_text_chunk(driver, record)
+        if "table_id" in record or "id" in record and "page_number" in record:
+            # This looks like a table record (from neo4j_query)
+            item = await _neo4j_record_to_table(driver, record)
             if item:
                 enriched.append(item)
+                logger.info(f"Added table from neo4j_query: {item.get('table_id')} (p{item.get('page')})")
         
-        elif "table_id" in record:
-            item = await _neo4j_record_to_table(driver, record)
+        elif "section_id" in record or "content" in record:
+            item = await _neo4j_record_to_text_chunk(driver, record)
             if item:
                 enriched.append(item)
         
@@ -1225,20 +1562,32 @@ async def node_build_context(
     # Sort by score
     deduplicated.sort(key=lambda x: x.get("score", 0), reverse=True)
     
-    # HARD LIMITS: adaptive based on content type
-    # If we have text chunks, prioritize them and limit schemas to prevent context pollution
+    # HARD LIMITS: adaptive based on content type AND query intent
     sections = [i for i in deduplicated if i["type"] == "text_chunk"]
     tables = [i for i in deduplicated if i["type"] == "table_chunk"]
     schemas = [i for i in deduplicated if i["type"] == "schema"]
     
-    # Adaptive limits: if we have text, limit schemas; otherwise allow more schemas
-    if sections:
-        # Mixed/text query: prioritize text, limit schemas to 1
+    # Get query intent from state
+    query_intent = state.get("query_intent", "text")
+    
+    # Adaptive limits based on intent
+    if query_intent == "table":
+        # Table-focused query: prioritize tables
+        max_sections = 3
+        max_tables = 5
+        max_schemas = 1
+    elif query_intent == "schema":
+        # Schema-focused query: prioritize schemas
+        max_sections = 2
+        max_tables = 1
+        max_schemas = 5
+    elif sections:
+        # Text query with sections: allow reasonable tables/schemas
         max_sections = 5
-        max_tables = 3
-        max_schemas = 1  # Only 1 schema when we have text
+        max_tables = 3   # Allow 3 tables - they provide specs
+        max_schemas = 2  # Allow 2 schemas - diagrams help understanding
     else:
-        # Schema-only query: allow more schemas
+        # No sections found, allow more tables/schemas
         max_sections = 3
         max_tables = 3
         max_schemas = 3
@@ -1252,7 +1601,7 @@ async def node_build_context(
     state["enriched_context"] = final_context
     
     logger.info(
-        f"Context built with hard limits: "
+        f"Context built (intent={query_intent}): "
         f"{len(sections)}/{max_sections} sections, "
         f"{len(tables)}/{max_tables} tables, "
         f"{len(schemas)}/{max_schemas} schemas "
@@ -1422,8 +1771,9 @@ async def _fetch_table_full(
         result = await session.run(query, table_id=hit["table_id"])
         record = await result.single()
         
-        if not record or not record.get("doc_title"):
-            # Fallback
+        if not record:
+            logger.warning(f"Table not found in Neo4j: {hit.get('table_id')}")
+            # Fallback - use hit data (may come from entity_search with file_path)
             return {
                 "type": "table_chunk",
                 "table_id": hit.get("table_id"),
@@ -1432,10 +1782,15 @@ async def _fetch_table_full(
                 "title": hit.get("table_title", ""),
                 "caption": hit.get("table_caption", ""),
                 "page": hit.get("page"),
-                "file_path": None,
+                "file_path": hit.get("file_path"),  # Use file_path from hit
                 "text": hit.get("text_preview", ""),
                 "score": hit.get("score", 0),
             }
+        
+        # Log file_path for debugging
+        file_path = record.get("file_path") or hit.get("file_path")
+        if not file_path:
+            logger.warning(f"Table {hit.get('table_id')} has no file_path in Neo4j or hit")
         
         # Combine all chunks
         chunk_texts = [t for t in record["chunk_texts"] if t]
@@ -1444,15 +1799,15 @@ async def _fetch_table_full(
         return {
             "type": "table_chunk",
             "table_id": record["table_id"],
-            "doc_id": record["doc_id"],
-            "doc_title": record["doc_title"],
+            "doc_id": record["doc_id"] or hit.get("doc_id"),
+            "doc_title": record.get("doc_title") or hit.get("doc_title", "Unknown"),
             "section_title": record.get("section_title"),
-            "title": record["table_title"],
-            "caption": record.get("caption", ""),
+            "title": record["table_title"] or hit.get("table_title", ""),
+            "caption": record.get("caption") or hit.get("caption", ""),
             "page": record["page"],
             "rows": record["rows"],
             "cols": record["cols"],
-            "file_path": record["file_path"],
+            "file_path": file_path,  # Use Neo4j first, fallback to hit
             "text": combined_text,
             "score": hit.get("score", 0),
         }
@@ -1545,10 +1900,12 @@ async def _neo4j_record_to_text_chunk(driver: Driver, record: Dict) -> Optional[
 
 async def _neo4j_record_to_table(driver: Driver, record: Dict) -> Optional[Dict[str, Any]]:
     """Convert Neo4j record to table format"""
-    if "table_id" in record:
+    # Support both "table_id" and "id" keys (from different queries)
+    table_id = record.get("table_id") or record.get("id")
+    if table_id:
         return {
             "type": "table_chunk",
-            "table_id": record.get("table_id"),
+            "table_id": table_id,
             "doc_id": record.get("doc_id"),
             "doc_title": record.get("doc_title", "Unknown"),
             "title": record.get("table_title") or record.get("title", ""),
@@ -1624,11 +1981,14 @@ def node_llm_reasoning(state: GraphState) -> GraphState:
     
     schemas_text = ""
     if schemas:
-        schemas_text += "=== DIAGRAMS ===\n\n"
+        schemas_text += "=== DIAGRAMS (will be displayed to user as images) ===\n\n"
         for i, s in enumerate(schemas, 1):
             schemas_text += f"[DIAGRAM{i}] {s.get('title', 'Figure')}\n"
             schemas_text += f"Caption: {s.get('caption', '')}\n"
-            schemas_text += f"Document: {s.get('doc_title', 'Unknown')} (Page {s.get('page')})\n\n"
+            if s.get('llm_summary'):
+                schemas_text += f"Description: {s.get('llm_summary')}\n"
+            schemas_text += f"Document: {s.get('doc_title', 'Unknown')} (Page {s.get('page')})\n"
+            schemas_text += f"NOTE: This diagram image will be shown to the user below your answer.\n\n"
     
     # System prompt
     system_prompt = """You are an expert marine technical documentation assistant.
@@ -1639,9 +1999,17 @@ CONVERSATION RULES:
 - Remember context from the conversation (user's name, previous questions, etc.)
 - For technical questions, use the provided documentation context
 
+IMPORTANT - DIAGRAMS AND TABLES IN CONTEXT:
+- When DIAGRAMS or TABLES are provided in context, they WILL BE DISPLAYED to the user as images
+- These ARE the drawings/diagrams/figures the user is asking about
+- DO NOT say "drawings are not provided" or "I don't have the drawings" if DIAGRAMS section exists
+- Instead, REFERENCE these diagrams: "The drawings provided show..." or "See the diagrams below..."
+- If a diagram shows what user asked for (e.g., control panel drawing), describe what it shows based on title/caption
+
 CITATION RULES (for technical answers):
 - Cite facts using: [Document Name | Section/Table/Diagram: Title | Page X]
 - If documentation context is empty or insufficient for a technical question, say what information is missing
+- Reference diagrams by their title/caption when answering diagram-related questions
 
 You can answer general questions without documentation context."""
     
@@ -1701,6 +2069,10 @@ You can answer general questions without documentation context."""
         url = t.get("file_path")
         if url and not url.startswith('/'):
             url = '/' + url
+        if not url:
+            logger.warning(f"Table {t.get('table_id')} has no file_path/url - won't display in frontend")
+        else:
+            logger.debug(f"Table {t.get('table_id')} url: {url}")
         table_refs.append({
             "table_id": t.get("table_id"),
             "title": t.get("title", ""),
@@ -1726,6 +2098,8 @@ You can answer general questions without documentation context."""
     logger.info(f"   Citations: {len(citations)}")
     logger.info(f"   Figures: {len(figures)}")
     logger.info(f"   Tables: {len(table_refs)}")
+    for tr in table_refs:
+        logger.info(f"     - {tr.get('title')} (p{tr.get('page')}) url={tr.get('url')}")
     logger.info(f"{'='*60}\n")
     
     return state
