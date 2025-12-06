@@ -363,33 +363,42 @@ class TableExtractor:
     def _is_valid_table(self, matrix: List[List[str]]) -> bool:
         """
         Validate that matrix represents a real table.
-        Filters out false positives from aligned text.
+        Filters out false positives from aligned text and diagrams.
+        Balanced for maritime technical tables with some merged cells.
         """
         if not matrix or len(matrix) < 2:
-            return False
+            return False  # Need at least 2 rows
 
-        # Check 1: Consistent column count
+        # Check 1: Column count consistency (moderate tolerance for merged cells)
         col_counts = [len(row) for row in matrix]
-        if max(col_counts) - min(col_counts) > 2:
+        max_cols = max(col_counts)
+        min_cols = min(col_counts)
+        
+        # Allow up to 40% variation for merged cells
+        if max_cols > 0 and (max_cols - min_cols) / max_cols > 0.4:
             return False  # Too irregular
 
-        # Check 2: Not just single column
+        # Check 2: Must have at least 2 columns on average
         avg_cols = sum(col_counts) / len(col_counts)
         if avg_cols < 2:
-            return False
+            return False  # Single column - probably not a table
 
-        # Check 3: Cell content diversity
-        # Real tables have mix of text/numbers/empty
+        # Check 3: Cell content - must have reasonable content
         all_cells = [cell for row in matrix for cell in row]
         non_empty = [c for c in all_cells if (c or "").strip()]
 
-        if len(non_empty) < len(all_cells) * 0.3:
-            return False  # Too sparse
+        if len(non_empty) < len(all_cells) * 0.25:
+            return False  # Too sparse (less than 25%)
 
-        # Check 4: Avoid pure text paragraphs
-        # Real table cells are short
-        avg_cell_length = sum(len(c or "") for c in non_empty) / len(non_empty)
-        if avg_cell_length > 100:
-            return False  # Cells too long - probably paragraphs
+        # Check 4: Cell length - avoid paragraphs but allow descriptions
+        if non_empty:
+            avg_cell_length = sum(len(c or "") for c in non_empty) / len(non_empty)
+            if avg_cell_length > 150:
+                return False  # Cells too long - probably paragraphs
+
+        # Check 5: Must have structured data pattern (numbers, short strings)
+        # Schemas often have very few actual text cells
+        if len(non_empty) < 4:
+            return False  # Too few cells with content
 
         return True
