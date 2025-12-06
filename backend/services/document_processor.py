@@ -10,7 +10,7 @@ import pdfplumber
 import hashlib
 import uuid
 import re
-from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable
+from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable, Set
 from pathlib import Path
 import logging
 
@@ -83,6 +83,19 @@ class DocumentProcessor:
             r'(?:see |refer to |as shown in |figure |fig\.|diagram |schema |table )\s*([0-9]+(?:\.[0-9]+)*)',
             re.IGNORECASE,
         )
+        
+        # TOC detection patterns
+        self.toc_header_pattern = re.compile(
+            r'^(?:TABLE\s+OF\s+CONTENTS?|CONTENTS?|INDEX|목차|目次)\s*$',
+            re.IGNORECASE
+        )
+        self.toc_entry_pattern = re.compile(
+            r'^(.+?)\s*[\.…·\-_]{3,}\s*(\d+)\s*$|^(\d+(?:\.\d+)*)\s+(.+?)\s+(\d+)\s*$',
+            re.MULTILINE
+        )
+        
+        # Track TOC pages to exclude from table extraction
+        self._toc_pages: Set[int] = set()
         
         # Chunking parameters
         self.chunk_size_tokens = 400
@@ -272,9 +285,169 @@ class DocumentProcessor:
         return sha256.hexdigest()
 
     def _extract_toc(self, doc: fitz.Document) -> List[Dict]:
-        """Extract table of contents from PDF metadata."""
+        """
+        Extract table of contents from PDF metadata AND by scanning pages.
+        Also identifies TOC pages to exclude from table extraction.
+        """
+        # Reset TOC pages tracking
+        self._toc_pages = set()
+        
+        # Try PDF metadata TOC first
         toc = doc.get_toc()
-        return [{"level": level, "title": title, "page": page} for level, title, page in toc]
+        toc_entries = [{"level": level, "title": title, "page": page} for level, title, page in toc]
+        
+        if toc_entries:
+            logger.info(f"Found {len(toc_entries)} TOC entries from PDF metadata")
+            return toc_entries
+        
+        # Scan ALL pages for TOC content (supports merged documents with TOC in middle)
+        logger.info("No PDF TOC metadata, scanning all pages for table of contents...")
+        
+        # First pass: quick scan for TOC headers
+        toc_start_pages = []
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            # Quick text extraction - just first 500 chars to find header
+            text_start = page.get_text()[:500]
+            
+            if self.toc_header_pattern.search(text_start):
+                toc_start_pages.append(page_num)
+                logger.info(f"Found TOC header on page {page_num + 1}")
+        
+        # Process each TOC location found
+        for toc_start in toc_start_pages:
+            page = doc.load_page(toc_start)
+            text = page.get_text()
+            
+            self._toc_pages.add(toc_start)
+            
+            # Parse TOC entries from this page
+            entries = self._parse_toc_page(text, toc_start)
+            toc_entries.extend(entries)
+            
+            # Check next few pages for continuation
+            for next_page in range(toc_start + 1, min(toc_start + 5, len(doc))):
+                next_text = doc.load_page(next_page).get_text()
+                # If page has many dotted lines or page numbers, likely TOC continuation
+                dot_matches = len(re.findall(r'[\.…·]{3,}\s*\d+', next_text))
+                if dot_matches >= 3:
+                    self._toc_pages.add(next_page)
+                    entries = self._parse_toc_page(next_text, next_page)
+                    toc_entries.extend(entries)
+                    logger.info(f"TOC continues on page {next_page + 1} ({len(entries)} entries)")
+                else:
+                    break
+        
+        if toc_entries:
+            # Filter: keep only level 1 entries for chapters (level 2+ are sections)
+            chapter_entries = [e for e in toc_entries if e["level"] == 1]
+            
+            logger.info(
+                f"Extracted {len(toc_entries)} TOC entries from pages {sorted(self._toc_pages)}, "
+                f"{len(chapter_entries)} are chapter-level (level 1)"
+            )
+            
+            # If multiple TOCs found (merged docs), log it
+            if len(toc_start_pages) > 1:
+                logger.info(f"Note: Found {len(toc_start_pages)} separate TOC sections (merged document?)")
+            
+            # Return only chapter-level entries for chapter creation
+            # Sections will be detected from text parsing
+            return chapter_entries
+        else:
+            logger.info("No TOC found in document")
+            return []
+    
+    def _parse_toc_page(self, text: str, page_num: int) -> List[Dict]:
+        """
+        Parse TOC entries from page text.
+        Handles formats like:
+        - "Chapter 1 - Introduction .............. 5"
+        - "1.2 System Overview .... 12"
+        - "SAFETY PRECAUTIONS          3"
+        """
+        entries = []
+        lines = text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 5:
+                continue
+            
+            # Skip TOC header itself
+            if self.toc_header_pattern.match(line):
+                continue
+            
+            # Pattern 1: "Title .............. 5"
+            match1 = re.match(r'^(.+?)\s*[\.…·\-_]{3,}\s*(\d+)\s*$', line)
+            if match1:
+                title = match1.group(1).strip()
+                page = int(match1.group(2))
+                level = self._determine_toc_level(title)
+                entries.append({"level": level, "title": title, "page": page})
+                continue
+            
+            # Pattern 2: "1.2.3 Title      12"
+            match2 = re.match(r'^(\d+(?:\.\d+)*)\s+(.+?)\s{2,}(\d+)\s*$', line)
+            if match2:
+                number = match2.group(1)
+                title = f"{number} {match2.group(2).strip()}"
+                page = int(match2.group(3))
+                level = number.count('.') + 1
+                entries.append({"level": level, "title": title, "page": page})
+                continue
+            
+            # Pattern 3: "CHAPTER 1 - Title    5" or just page number at end
+            match3 = re.match(r'^(.+?)\s+(\d+)\s*$', line)
+            if match3 and len(match3.group(1)) > 3:
+                title = match3.group(1).strip()
+                # Avoid matching random lines with numbers
+                if not re.match(r'^\d', title) or re.match(r'^\d+\.', title):
+                    page = int(match3.group(2))
+                    level = self._determine_toc_level(title)
+                    entries.append({"level": level, "title": title, "page": page})
+        
+        return entries
+    
+    def _determine_toc_level(self, title: str) -> int:
+        """
+        Determine TOC entry level based on title format.
+        Level 1 = Chapters (will create Chapter nodes)
+        Level 2+ = Sections (will be detected from text, not TOC)
+        """
+        title_upper = title.upper().strip()
+        title_stripped = title.strip()
+        
+        # Level 1: Explicit chapter/part/appendix markers
+        if re.match(r'^(?:CHAPTER|PART|APPENDIX)\s+', title_upper):
+            return 1
+        
+        # Level 1: ALL CAPS short title (likely major section)
+        if title_upper == title_stripped and len(title_stripped.split()) <= 5:
+            # But not if it starts with a number like "1.2 TITLE"
+            if not re.match(r'^\d+\.', title_stripped):
+                return 1
+        
+        # Level based on numbering depth
+        num_match = re.match(r'^(\d+(?:\.\d+)*)\s+', title_stripped)
+        if num_match:
+            number = num_match.group(1)
+            dot_count = number.count('.')
+            
+            # "1" or "2" = level 1 (chapter)
+            # "1.1" = level 2 (section)
+            # "1.1.1" = level 3 (subsection)
+            return dot_count + 1
+        
+        # Roman numerals at start = level 1
+        if re.match(r'^[IVX]+[\.\s]', title_upper):
+            return 1
+        
+        return 2  # Default to level 2 (section)
+    
+    def is_toc_page(self, page_num: int) -> bool:
+        """Check if a page is a TOC page (should not extract tables from it)."""
+        return page_num in self._toc_pages
 
     # -------------------------------------------------------------------------
     # Chunk processing 
@@ -385,8 +558,17 @@ class DocumentProcessor:
             
             safe_doc_id = self._sanitize(doc_id)
             
+            # Skip table extraction on TOC pages (pdfplumber often misdetects TOC as tables)
+            is_toc_page = self.is_toc_page(page_num)
+            if is_toc_page:
+                logger.info(f"Page {page_num + 1}: Skipping table extraction (TOC page)")
+            
             for region in reclassified_regions:
                 if region.region_type == RegionType.TABLE:
+                    # Skip tables on TOC pages
+                    if is_toc_page:
+                        continue
+                    
                     # Try table extraction → fallback to LLM detection (TABLE/TEXT/DIAGRAM)
                     result = await self.smart_processor.process_table_region(
                         fitz_page=page,
@@ -466,7 +648,27 @@ class DocumentProcessor:
             # )
             
             # ===== STEP 4: Check for Chapter Headers =====
-            toc_entry = next((t for t in toc if t["page"] == page_num + 1), None)
+            # Try to match TOC entry by page number first
+            toc_entry = next((t for t in toc if t["page"] == page_num + 1 and t["level"] == 1), None)
+            
+            # Also check if any TOC chapter title appears on this page (for merged docs with offset pages)
+            if not toc_entry:
+                page_text_lower = page_text.lower() if page_text else ""
+                for t in toc:
+                    if t["level"] == 1:
+                        # Normalize title for comparison
+                        toc_title_lower = t["title"].lower().strip()
+                        # Check if TOC title appears at start of any line on this page
+                        if toc_title_lower in page_text_lower:
+                            # Verify it's actually a header (appears near top or as standalone line)
+                            for line in page_text.split('\n')[:15]:  # Check first 15 lines
+                                if toc_title_lower in line.lower().strip():
+                                    toc_entry = t
+                                    logger.debug(f"Matched TOC chapter '{t['title']}' by title on page {page_num + 1}")
+                                    break
+                            if toc_entry:
+                                break
+            
             if toc_entry and toc_entry["level"] == 1:
                 # Finalize any accumulated section
                 if current_section_accumulator:
@@ -493,7 +695,7 @@ class DocumentProcessor:
                 last_chapter_id = chapter_id
                 current_section_accumulator = None
                 
-                logger.info(f"Created chapter: {toc_entry['title']}")
+                logger.info(f"Created chapter from TOC: {toc_entry['title']}")
             
             # ===== STEP 5: Extract Text and Parse Sections =====
         
@@ -505,6 +707,42 @@ class DocumentProcessor:
                 
                 if not line_stripped:
                     continue
+                
+                # Check for chapter header in text (if no TOC entry on this page)
+                if not toc_entry or toc_entry.get("level") != 1:
+                    chapter_match = self.chapter_pattern.match(line_stripped)
+                    if chapter_match:
+                        chapter_number = chapter_match.group(1)
+                        chapter_title = chapter_match.group(2).strip()
+                        full_title = f"{line_stripped}"
+                        
+                        # Finalize any accumulated section
+                        if current_section_accumulator:
+                            pending_small_section = await self._finalize_section(
+                                current_section_accumulator,
+                                current_chapter_id,
+                                doc_id,
+                                owner,
+                                pending_small_section
+                            )
+                        
+                        # Create new chapter from text pattern
+                        chapter_id = self._stable_chapter_id(doc_id, full_title, page_num)
+                        chapter_data = {
+                            "id": chapter_id,
+                            "number": chapter_number,
+                            "title": full_title,
+                            "start_page": page_num + 1,
+                            "level": 1,
+                        }
+                        
+                        await self.graph.create_chapter(chapter_data, doc_id)
+                        current_chapter_id = chapter_id
+                        last_chapter_id = chapter_id
+                        current_section_accumulator = None
+                        
+                        logger.info(f"Created chapter from text: {full_title}")
+                        continue  # Don't process this line as section
                 
                 # Check for section header
                 if self._is_section_header(line_stripped):
