@@ -1,0 +1,2561 @@
+[
+  {
+    "question": "What are the main functional sections of the incinerator?",
+    "answer": {
+      "answer_text": "The incinerator consists of a primary combustion chamber for burning solid waste and waste oil, a secondary combustion chamber for completing combustion of unburned gases and particles, and an after-burning chamber to finalize oxidation before exhaust discharge.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "da228c63-ac47-5d67-b875-b93dbcc70b87",
+          "page": 76,
+          "title": "2.1 THE INCINERATOR",
+          "doc_title": "Incinerator"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "f332bf4c-dab8-55aa-b0e8-28b4c27a9239",
+          "page": 76,
+          "title": "2.2 PRIMARY COMBUSTION CHAMBER",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "The pump of incinerator has no suction. What can be a cause?",
+    "answer": {
+      "answer_text": "According to the troubleshooting table for the W.O. dosing pump (PU3), loss of suction can be caused by excessive adhesion between rotor and stator, wrong direction of rotation, leaks in the suction pipe or shaft sealing, suction head being too high, liquid viscosity being too high, incorrect pump speed, air inclusions in the conveyed liquid, discharge pressure head being too high, the pump running partially or completely dry, misaligned or worn coupling components, excessive axial play in the linkage or wrongly installed bush, foreign substances inside the pump, worn stator or rotor, worn joint parts, partially or completely blocked suction pipework, pumping liquid temperature being too high causing stator expansion, gland packing being overtightened or worn, and solid content or particle size being too large.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "6fb611cd-4768-5ef8-87db-44beeeb5f0f5",
+          "page": 101,
+          "title": "4.4 W.O DOSING PUMP(PU3)",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "3112c4223099ecb2dd5ca72b",
+          "title": "Table - Page 101 (LLM)",
+          "caption": "",
+          "url": "/tables/original/doc_1764965997/page_101_llm_tbl.png",
+          "page": 101,
+          "doc_title": "Incinerator",
+          "rows": 26,
+          "cols": 11
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How should operators react to abnormal start-up behavior of the incinerator?",
+    "answer": {
+      "answer_text": "In case of abnormal start-up, the operator must immediately stop the incinerator by activating the STOP switch. Oscillating combustion on the first start-up must be stopped at once in the same way. After shutting down, the operator should determine the cause of the abnormal start-up or operation and consult the instruction manual under the “Trouble shooting” section.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "9ef6b40a-aef3-52a0-8ca3-c750015ad4b5",
+          "page": 90,
+          "title": "3.4 ABNORMAL START UP AND OPERATION OF INCINERATOR",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What to do when getting flame failure alarm while the W.O dosing pump is running?",
+    "answer": {
+      "answer_text": "When a flame failure alarm occurs while the W.O dosing pump (PU3) is running, take the following actions:\n\n- If a flame is visible through the sight glass: clean the flame detector glass (FD1/FD2).\n- If repeated flame failure persists: remove and clean the W.O burner (see W.O burner instructions).\n- Replace the stator in the W.O dosing pump if damaged.\n- Dismount, inspect and clean the W.O valve (POV1/POV2) if obstructed.\n- Examine the coil and electrical connection of solenoid valve (SV4.1/SV4.2) if the valve does not open.\n- Clean the self-cleaning strainer if blocked with fibers.\n- Check for constant waste oil circulation in the circulation pipe. If absent, the rubber stator of PU3 may be worn out (see spare parts list).\n- Clean the W.O dosing pump if it is partly blocked.\n- If the W.O dosing pump is not running: check electrical connections.\n- If the frequency control of PU3 has failed or there is no start signal from the PLC: reset the alarm or switch off main power and turn it on again after 3 minutes.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "9066bedd-bf88-5f2d-9523-71039fc056e4",
+          "page": 95,
+          "title": "No diesel oil to the incinerator:",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Explain the alarm for atomizing air pressure failure in the incinerator and how to resolve it.",
+    "answer": {
+      "answer_text": "The 'W.O burner atomizing air pressure low' alarm appears when the atomizing air pressure drops below the required level. To resolve this issue:\n\n**Causes and Solutions:**\n\n- Pressure regulator (TR) wrongly adjusted: Adjust to correct pressure between 0.8 and 2.0 Bar, depending on W.O oil viscosity.\n- Failure in air supply: Check the compressed air supply system to the incinerator.\n- Pressure control (PS3) wrongly adjusted: Adjust to correct range of 0.8 Bar minimum.\n- Valves in air-pipe system closed: Inspect and open all valves in the air supply line.\n- Filter for air (OL) obstructed: Clean or replace the air filter.\n\nAfter addressing the root cause, reset the alarm through the control panel. Proper atomizing air pressure is critical for efficient W.O combustion and flame stability.\n\n[TABLE1] [Incinerator | Atomizing Air Pressure Failure | Page 98]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "h3i4j5k6-9g0h-1i2j-3k4l-m5n6o7p8q9r0",
+          "page": 98,
+          "title": "ALARM FOR ATOMIZING AIR PRESSURE FAILURE",
+          "doc_title": "Incinerator"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "i4j5k6l7-0h1i-2j3k-4l5m-n6o7p8q9r0s1",
+          "page": 97,
+          "title": "4.3 TROUBLESHOOTING - Alarms",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "6dc5005bf9ebbbd12a2f4e1a",
+          "title": "Table - Page 56 (LLM)",
+          "caption": "Control pressure",
+          "url": "/tables/original/doc_1765223725/page_56_llm_38_624_tbl.png",
+          "page": 56,
+          "doc_title": "Incinerator",
+          "rows": 4,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Show me the process flow diagram of the incinerator system.",
+    "answer": {
+      "answer_text": "The process diagram illustrates the complete operational flow of the incinerator system:\n\n**Main Components Flow:**\n- Primary combustion chamber where solid waste and W.O oil are incinerated\n- Secondary combustion chamber and after-burning chamber for complete combustion of un-combusted gases\n- Air flow paths through the primary blower, ejector system, and air cooling double wall\n- W.O system: W.O tank with heating element → Mill pump → W.O dosing pump (PU3) → W.O burner\n- Diesel oil system: D.O tank → Primary and Secondary D.O burners\n- Compressed air supply for atomization\n- Exhaust gas pathway through damper to funnel\n- Temperature monitoring via thermocouples (TC1, TC2, TC3)\n- Automatic sluice operation for waste loading\n\nThe diagram shows how materials flow through the system and illustrates the integrated control and safety monitoring systems.",
+      "citations": [],
+      "figures": [
+        {
+          "schema_id": "3537e3ba2d2a08c3a68bc940",
+          "title": "Schema - Page 76.0",
+          "caption": "",
+          "url": "/schemas/original/doc_1765223725/page_76_schema_0.png",
+          "page": 76,
+          "doc_title": "Incinerator"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What are the steps for starting the incinerator for solid waste burning?",
+    "answer": {
+      "answer_text": "The startup procedure for solid waste burning (MD2 mode) consists of the following positions:\n\n**POS. 1 - START OF INCINERATOR:**\nPrimary blower, Secondary D.O burner blower and integrated process timer start.\n\n**POS. 2 - STOP OF COMBUSTION:**\nStop of combustion stops the supply of diesel oil to Primary and Secondary D.O burner. Primary blower, Primary and Secondary D.O burner blower continue working on cooling program.\n\n**POS. 3 - STOP OF INCINERATOR:**\nThe cooling program stops when the temperature in the incinerator is below 100°C (212°F). When the incinerator has stopped, switch off the main switch on the control panel after the blower has been off for 30 minutes.\n\n**POS. 4 - START OF PREHEATING:**\nAfter START OF THE INCINERATOR and 60 sec. pre-purging time, the Secondary D.O burner in the secondary combustion chamber will start.\n\nThese sequential positions ensure proper startup, operation, and shutdown with appropriate cooling periods to protect the refractory lining.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223725",
+          "section_id": "44b45d44-7f9f-5235-b487-511ccbdab581",
+          "page": 81,
+          "title": "3.1 OPERATING INSTRUCTIONS",
+          "doc_title": "Incinerator"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What are the main specifications of the W.O dosing pump models?",
+    "answer": {
+      "answer_text": "The W.O dosing pump is a self-priming positive displacement pump with geared motor, available in three main models:\n\n**HMD 008-12L:**\n- Capacity: Max. 115 l/h\n- Head: 2 Kg/cm²\n- Output speed: Max. 475 rpm\n- Motor capacity: 0.45 Kw\n- Motor speed: 1690 rpm\n\n**HMD 012-12L:**\n- Capacity: Max. 174 l/h\n- Head: 2 Kg/cm²\n- Output speed: Max. 475 rpm\n- Motor capacity: 0.45 Kw\n- Motor speed: 1690 rpm\n\n**HMD 025-6L:**\n- Capacity: Max. 233 l/h\n- Head: 2 Kg/cm²\n- Output speed: Max. 243 rpm\n- Motor capacity: 0.45 Kw\n- Motor speed: 1690 rpm\n\nAll models feature the same motor capacity and pressure head, with varying flow rates and output speeds to accommodate different system requirements.",
+      "citations": [],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "75b48db974285604c27b964c",
+          "title": "Table - Page 110",
+          "caption": "",
+          "url": "/tables/original/doc_1765223725/page_110_region_58_102_tbl.png",
+          "page": 110,
+          "doc_title": "Incinerator",
+          "rows": 12,
+          "cols": 4
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What is the function of the safety valve of water heater?",
+    "answer": {
+      "answer_text": "The safety valve is an automatic pressure-relieving device actuated by the static pressure upstream of the valve and opens in proportion when the pressure exceeds the opening pressure. It is used primarily for liquid service.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223122",
+          "section_id": "1abc9987-6f57-593c-8881-933819f26ada",
+          "page": 17,
+          "title": "Content starting page 16",
+          "doc_title": "Water Heater"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How is the emergency alarm integrated into the heater control circuit on schema?",
+    "answer": {
+      "answer_text": "The emergency alarm is driven by the emergency temperature controller: when measured temperature exceeds the emergency controller setpoint (TE3) the emergency lamp and buzzer are activated. The buzzer is stopped by the buzzer‑stop push button; after verification the system is reset by the reset push button. When the emergency lamp and the over‑temperature lamp are both ON, all heaters are stopped. [DIAGRAM1] [Water Heater | Content starting page 16 | Page 16]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765223122",
+          "section_id": "1abc9987-6f57-593c-8881-933819f26ada",
+          "page": 16,
+          "title": "Content starting page 16",
+          "doc_title": "Water Heater"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765223122",
+          "section_id": "747891ff-e498-59d3-bd3b-2dd8ef10adca",
+          "page": 15,
+          "title": "Content starting page 15",
+          "doc_title": "Water Heater"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "b8aeb396adbde456e3b7a7c1",
+          "title": "Schema - Page 10.0",
+          "caption": "",
+          "url": "/schemas/original/doc_1765223122/page_10_schema_0.png",
+          "page": 10,
+          "doc_title": "Water Heater"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Show the LNG dual-wall piping principle and explain its purpose.",
+    "answer": {
+      "answer_text": "The LNG dual-wall piping system uses two concentric steel pipes: an inner pipe made of duplex or stainless steel carries the fuel, while an outer shielding pipe encloses it and creates a ventilated annular space equipped with monitoring for flow and hydrocarbons. Double-wall piping is mandatory in enclosed spaces and may also be used in open spaces, whereas single-wall gas piping is only permitted externally. The purpose of this design is to contain leakage within the outer pipe, detect it via ventilation and sensors, trigger an automatic shutdown of LNG operation, and support subsequent blow-off and nitrogen purge sequences that clear LNG from the system for continued safe operation or maintenance.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "d72f92f5-83bc-5fc7-914b-5a1b214cbc4a",
+          "page": 56,
+          "title": "system are mandatory on all components mounted inside the engine room",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "bcb30eaa-7a61-5d51-b9c5-970abbc18a46",
+          "page": 986,
+          "title": "2 (14)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "7290d75c3cd310657787160b",
+          "title": "Schema - Page 1000.0",
+          "caption": "",
+          "url": "/schemas/original/doc_1765228283/page_1000_schema_0.png",
+          "page": 1000,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What first aid measures are described for LNG inhalation and skin contact?",
+    "answer": {
+      "answer_text": "For inhalation, the manual states that the affected person must be moved to fresh air and kept at rest. If breathing is irregular or absent, artificial respiration or oxygen must be administered by trained personnel; unconscious persons must be placed in the recovery position and medical attention sought. Tight clothing should be loosened.\n\nFor skin contact, the manual instructs washing the skin with soap and water, removing contaminated clothing except where it adheres to frozen tissue, soaking clothing with water first to prevent ignition from static discharge, and seeking medical attention if symptoms develop. Where liquid LNG has frozen tissue, the area is to be warmed slowly with lukewarm water without rubbing, and contaminated clothing and shoes must be cleaned before reuse.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4642f1d0-dcfa-52ce-acb5-a35f7784f104",
+          "page": 58,
+          "title": "Safety information",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Explain how the share of pilot fuel changes with engine load in gas mode versus specified dual-fuel mode.",
+    "answer": {
+      "answer_text": "In gas mode, the share of pilot fuel is highest at low load and falls progressively as the engine load increases, becoming only a small fraction at high load. In specified dual-fuel mode, the pilot fraction remains higher across the entire load range and decreases more gradually, because fuel oil is added to reach the requested engine load.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "783ac53f-ffd1-5671-acb8-1325b6fadae4",
+          "page": 71,
+          "title": "3.3   Engine operating modes",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "99eeb9d0b782cf1d360d37f8",
+          "title": "Schema - Page 71.1",
+          "caption": "The ME-GI concept comprises three different fuel modes:",
+          "url": "/schemas/original/doc_1765228283/page_71_schema_1.png",
+          "page": 71,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What hydraulic and sealing pressures are specified at 60°C gas temperature?",
+    "answer": {
+      "answer_text": "At 60°C the required pressures are 108 bar for the 200-bar hydraulic system, 160 bar for the 300-bar hydraulic system, 239 bar for the 450-bar hydraulic system, and 111 bar for the 330-bar sealing oil system.",
+      "citations": [],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "9f81a7b407d45edc6c3e04f8",
+          "title": "Table - Page 87",
+          "caption": "table below",
+          "url": "/tables/original/doc_1765228283/page_87_region_177_221_tbl.png",
+          "page": 87,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 12,
+          "cols": 4
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What is the function of crankcase relief valves and when might they open?",
+    "answer": {
+      "answer_text": "Crankcase relief valves protect the engine structure by venting excessive internal pressure. They open if oil mist ignites or pressure rises dangerously inside the crankcase, preventing structural failure and reducing explosion risk.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "f5409e9e-7069-5af1-8987-60b60c0a91eb",
+          "page": 130,
+          "title": "1 (4)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How is water scrubber equipment serviced under emission system duties?",
+    "answer": {
+      "answer_text": "Water scrubber equipment is maintained through scheduled checks and overhaul tasks. The pre-scrubber and main scrubber undergo condition checks, the treatment system is inspected for leaks and probe functionality, and major overhaul is performed at defined running hour intervals.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "5e3c50a0-7b45-5fad-b365-a8dbe9981958",
+          "page": 117,
+          "title": "56 - Emission Control System",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "f0c36689-4667-5028-ac30-8152fc6c7270",
+          "page": 124,
+          "title": "5 (6)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "cf467433-690a-5fa4-bcc2-d71883d772c6",
+          "page": 100,
+          "title": "Maintenance Schedule",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How does the axial vibration damper improve crankshaft operation?",
+    "answer": {
+      "answer_text": "The axial vibration damper limits axial movement of the crankshaft by absorbing and dissipating vibration forces. It uses a piston-like collar on the bearing journal inside a housing with oil-filled chambers. As the crankshaft moves, oil is forced through restricted passages between the chambers, transforming vibration energy into hydraulic damping. This stabilizes shaft motion and reduces stress on the bearings.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "df288719-c2ef-5c4e-babd-f508c93cf9af",
+          "page": 286,
+          "title": "1 (1)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "79a9f0af-e456-5c25-b7dc-7971be0e6628",
+          "page": 291,
+          "title": "2 (2)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "7117c2b8-53f3-571d-b1a6-4275d96c2a7c",
+          "page": 293,
+          "title": "2 (11)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "bdb264dc-dae2-5bf1-bc18-e837ecbd6b5a",
+          "page": 294,
+          "title": "3 (11)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What does poor cylinder liner surface inspection actually look like, and when does it justify an early overhaul?",
+    "answer": {
+      "answer_text": "A degraded liner typically shows scoring, micro seizure marks, corrosion patches near the top, dark areas tied to ring sticking, localized deposits above scavenge ports, and visible signs of ring breakage. Uneven wear becomes evident when inserting a ring into the bore and checking clearance variations. Early overhaul is justified when ring sealing is lost, blow-by increases, ring failures appear before scheduled intervals, measured wear approaches the documented percentage limit, or ovality exceeds roughly one millimeter causing rapid deterioration of piston overhaul frequency.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "fa714f94-2f9d-5a6e-8265-5e5d710d9e6c",
+          "page": 401,
+          "title": "Content starting page 401",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "effe80a3-1379-5892-9d88-5b6f6e869dff",
+          "page": 398,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "8c2b5177-dd2c-5dd2-a073-b442f421a2e4",
+          "page": 368,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What would cause the piston rod stuffing box to leak oil into the scavenge area before its planned maintenance interval?",
+    "answer": {
+      "answer_text": "Oil leakage into the scavenge space occurs when the piston rod sealing surface becomes damaged or insufficiently prepared. Longitudinal scratches caused by poorly fitted stuffing box rings reduce sealing. Coarser damage may require machining because ring contact is no longer uniform. Leakage can also result from inadequate MoS2 lubrication of the ring seating area or contamination of the stuffing box housing, both of which undermine sealing performance ahead of schedule.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "40e58748-3a7d-5fda-82b6-7c33abc2010f",
+          "page": 352,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "9ae8480c-ddf8-5d8e-b584-238c8ed786dd",
+          "page": 577,
+          "title": "6 (12)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "487427a6da81ec44a403706e",
+          "title": "Stuffing box work card extraction",
+          "caption": "Task details showing inspection and corrective actions.",
+          "url": "/tables/original/doc_1765228283/page_577_region_66_94_tbl.png",
+          "page": 577,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 16,
+          "cols": 5
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How to correctly center the piston in the liner when I am checking it from the scavenge space?",
+    "answer": {
+      "answer_text": "You roll the engine astern past bottom dead center until roughly 150-200 mm remains between the piston skirt and the liner bottom, ensuring the guide shoe rests against the crosshead guide. From the scavenge air space you measure the piston skirt–liner clearance fore and aft using a long feeler gauge. For a finer check you mount a digital dial gauge under the aft side of the skirt, zero it on the liner surface, then compare readings taken at the specified crank positions to assess symmetry. If the piston favors one side you adjust guide strip shimming until fore-and-aft clearance values match and maintain parallelism within the prescribed tolerance.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c226afa4-31c0-5fed-8573-33b49f0d8c11",
+          "page": 207,
+          "title": "2 (8)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "135facef-9c3d-58e3-8997-a02241d3a825",
+          "page": 212,
+          "title": "7 (8)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What sequence should I follow when slackening hydraulic nuts on the chain tightener?",
+    "answer": {
+      "answer_text": "You slacken the chain nuts one at a time because only one jack fits on the tightener wheel. You mount the studs and hydraulic nut against the bushing, fit the jack over it, stroke it to X (maximum stroke minus ten millimetres), apply pressure until nut D moves away, then depressurise so nut D becomes slightly loose. You repeat this sequence for the second nut.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "46e58b28-b523-50f6-8afe-81724a916526",
+          "page": 257,
+          "title": "2 (6)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4dee633b-1828-544c-b5fd-ea9fc09d98a4",
+          "page": 258,
+          "title": "3 (6)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "chain_tightener_sequence_illustration",
+          "title": "Hydraulic jack setup and loosening sequence",
+          "caption": "Diagram shows studs, hydraulic nuts, jack positioning and loosening method.",
+          "url": "/schemas/original/doc_1765228283/page_257_schema_0.png",
+          "page": 257,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": [
+        {
+          "table_id": "page_257_region_66_88_tbl",
+          "title": "Step sequence extraction",
+          "caption": "Illustrated procedural steps showing nut loosening stages.",
+          "url": "/tables/original/doc_1765228283/page_257_region_66_88_tbl.png",
+          "page": 257,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 18,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "mixed",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What is the correct way to support and remove the crosshead so I do not damage the guides or bearing surfaces?",
+    "answer": {
+      "answer_text": "Lower the crosshead until the guide shoes sit just below the frame-box openings, making sure the journal never touches the crank. Hook tackles into the eyebolts in the guide shoes and into the adjacent-cylinder guide shoes so the shoes and crosshead are fully supported. Mount the wire guide in the frame-box doorway and then lift the crosshead out with the crane, protected by padding, without letting it bump the guides or bearing surfaces.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "eba789dc-dd3b-576e-a3b6-7b94aee49947",
+          "page": 218,
+          "title": "3 (17)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "595ac7fb-e82e-5215-8f3c-5bb46f5059c9",
+          "page": 221,
+          "title": "6 (17)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "1485e77c-c454-5dfb-a9b1-ee94610dceab",
+          "page": 222,
+          "title": "7 (17)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "crosshead_support_1",
+          "title": "Crosshead support with tackles",
+          "caption": "Guide shoes supported by tackles and eyebolts during lowering.",
+          "url": "/schemas/original/doc_1765228283/page_221_schema_0.png",
+          "page": 221,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "crosshead_removal_1",
+          "title": "Crosshead lifted out through frame-box door",
+          "caption": "Wire guide and crane arrangement for removing crosshead.",
+          "url": "/schemas/original/doc_1765228283/page_223_schema_0.png",
+          "page": 223,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "page_219_schema_1",
+          "title": "Crosshead bearing cap dismantling",
+          "caption": "Illustration showing removal of bearing cap and mounting of wire guide.",
+          "url": "/schemas/original/doc_1765228283/page_219_schema_1.png",
+          "page": 219,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "page_220_schema_0",
+          "title": "Mounting lifting tools on crosshead",
+          "caption": "Illustration showing lifting tool, tackle attachment and rigging arrangement.",
+          "url": "/schemas/original/doc_1765228283/page_220_schema_0.png",
+          "page": 220,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How do I judge if the camshaft drive chain and chain wheels are worn enough that I have to act?",
+    "answer": {
+      "answer_text": "- Inspect the chain wheels' teeth and measure wear by placing a straight-edge over points A and B and measuring distance T14-61. If abnormal wear is seen at the tooth bottoms, make a 1:1 drawing and evaluate the wear profile; MAN Energy Solutions evaluates borderline cases.  \n\n- Inspect chain links for cracks, seized rollers or defective side plates. Verify rollers rotate freely. Measure chain wear by measuring the length of 10 links with master squares and compare against specified data:  \n  • T14-061 (Max tooth wear): 4.0 mm  \n  • T14-062 (Original 10-link length): 1143 mm  \n  • T14-063 (Scrapping limit): 1154.4 mm.  \n\nIf measured values exceed limits or if rollers/links bind or show cracking, corrective action is required.  \n[Main Engine Vol 1 | Wear check & measurements | Pages 245–249]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "1e75346b-5c7d-50aa-a801-aa5306e24f2f",
+          "page": 248,
+          "title": "2 (6)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "3304a63f-0ad1-58f2-99c1-bbc30fb0a669",
+          "page": 249,
+          "title": "3 (6)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c68ad373-130b-50d5-ae9d-9193cdcc70f6",
+          "page": 247,
+          "title": "1 (6)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c43a89e0-d028-5cfc-8f46-8da97f11481c",
+          "page": 245,
+          "title": "10 links measurements + 1 of a tensioned",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "page_248_schema_1",
+          "title": "Tooth wear measurement T14-61",
+          "caption": "Straight-edge positions A and B and reference distance T14-61 used to evaluate chain wheel tooth wear.",
+          "url": "/schemas/original/doc_1765228283/page_248_schema_0.png",
+          "page": 248,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "When should I check reciprocating parts clearances on this engine, and what conditions do I need to set up before measuring?",
+    "answer": {
+      "answer_text": "Reciprocating parts clearances must be checked with the engine positioned so that all components are unloaded, aligned and accessible for accurate measurement. \n\n1. Turn the crankshaft ASTERN past BDC until the piston skirt is positioned 150–200 mm below the cylinder liner bottom. Ensure the guide shoe rests correctly on the crosshead guide. In this position, verify piston centering by checking PF and PA skirt-to-liner clearances from the scavenge space using a long feeler.\n\n2. Mount a dial gauge underneath the stuffing box so its tip touches the piston rod and zero the gauge. Record the R1 value once the rod is stable. The dial gauge must be positioned at the bottom flange point specified in the work card.\n\n3. Confirm correct guide shoe height: approximately 100 mm above the chamfered area of the guide plane, with the crankthrow and connecting rod positioned to ensure the required geometric clearance.\n\n4. Measure guide clearances E1–H4 around the guide shoes with feelers at all designated locations. Measurements must be taken with the crosshead fully supported and square in the frame.\n\n5. Before measuring ZF and ZA (fore and aft clearance between connecting rod and crankthrow), turn the crankshaft ASTERN to 35° before TDC. At this crank angle, measure ZF and ZA at the machined surfaces where the clearances are smallest.\n\nThese conditions ensure that alignment, piston position and support forces are correct so that all reciprocating-part clearances can be measured accurately.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c226afa4-31c0-5fed-8573-33b49f0d8c11",
+          "page": 207,
+          "title": "2 (8)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "d2976eda-77e6-5c59-8643-2100dd444986",
+          "page": 210,
+          "title": "Nmin values",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "fa77ab38-5833-5f34-8497-c10f9c4c3032",
+          "page": 211,
+          "title": "6 (8)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "135facef-9c3d-58e3-8997-a02241d3a825",
+          "page": 212,
+          "title": "7 (8)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "page_207_schema_1",
+          "title": "Dial gauge R1 mounting under stuffing box",
+          "caption": "Diagram showing dial gauge placement against the piston rod and reference position for reading R1.",
+          "url": "/schemas/original/doc_1765228283/page_207_schema_1.png",
+          "page": 207,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "page_208_schema_1",
+          "title": "Correct guide shoe positioning (100 mm reference)",
+          "caption": "Guide shoe height relative to chamfered guide plane and correct crank/rod orientation for measurements.",
+          "url": "/schemas/original/doc_1765228283/page_208_schema_1.png",
+          "page": 208,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "page_209_schema_1",
+          "title": "Guide clearances E-H measurement points",
+          "caption": "Clearance measurement locations E1-E4, F1-F4, G1-G4 and H1-H4 around the crosshead guide shoes.",
+          "url": "/schemas/original/doc_1765228283/page_209_schema_1.png",
+          "page": 209,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "page_210_schema_1",
+          "title": "Crosshead alignment diagram (X/Y positions)",
+          "caption": "Illustration showing X1, X2, Y1, Y2 alignment points for evaluating crosshead straightness and guide loading.",
+          "url": "/schemas/original/doc_1765228283/page_210_schema_1.png",
+          "page": 210,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": [
+        {
+          "table_id": "page_212_clearance_sheet",
+          "title": "Reciprocating parts clearance recording sheet",
+          "caption": "Tabular layout for documenting PF, PA, E1-H4, R1-R2, and ZF-ZA measured values.",
+          "url": "/tables/original/doc_1765228283/page_212_llm_89_94_tbl.png",
+          "page": 212,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 25,
+          "cols": 5
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "mixed",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Explain how to scale ACC factor when switching from BN70 to BN100 oil",
+    "answer": {
+      "answer_text": "When switching from BN70 to BN100 cylinder oil, the ACC factor must be reduced because BN100 provides higher neutralization capacity. The correct method is to scale the original ACC(BN70) value by the BN ratio 70/100. This preserves the same acid-neutralizing capability in operation. Example: if the engine has been operating with ACC(BN70) = 0.26, then ACC(BN100) = 0.26 × 70/100 = 0.18. This relationship is confirmed by the feed-rate correlation table showing equivalent ACC values for BN70, BN80, BN90, and BN100 oils. The Fe/BN-vs-ACC diagrams further illustrate why a higher BN requires a proportionally lower ACC: increasing BN shifts the neutralization curve upward, so the optimal ACC point moves downward to maintain the same liner protection without over-lubrication.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "70b76ac0-68d6-5d2b-a84f-ac6a1c949f93",
+          "page": 314,
+          "title": "0.60 g/kWh",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "ACC_Fe_BN_Diagram_314",
+          "title": "Fe & BN vs ACC Factor - Optimal ACC region",
+          "caption": "Diagram illustrating the intersection of Fe-wear and BN-neutralization curves, identifying the optimal ACC point and explaining why higher-BN oils shift the curve downward.",
+          "url": "/schemas/original/doc_1765228283/page_314_schema_0.png",
+          "page": 314,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "ACC_Fe_BN_Diagram_313",
+          "title": "Detailed Fe/BN sweep correlation",
+          "caption": "A more detailed Fe–BN correlation curve demonstrating the sensitivity of Fe wear to ACC factor at different BN levels.",
+          "url": "/schemas/original/doc_1765228283/page_313_schema_1.png",
+          "page": 313,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": [
+        {
+          "table_id": "ACC_factor_vs_BN_Table",
+          "title": "Feed rate ACC factor related to cylinder oil BN",
+          "caption": "Table showing ACC factor equivalence across BN70, BN80, BN90 and BN100 oils.",
+          "url": "/tables/original/doc_1765228283/page_321_region_45_456_tbl.png",
+          "page": 321,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 20,
+          "cols": 5
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "mixed",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How drip-oil iron concentration trends indicate the transition point from safe into critical corrosion levels?",
+    "answer": {
+      "answer_text": "The transition from safe into critical corrosion levels is identified when scavenge drain-oil iron (Fe) rises toward and beyond roughly 200 mg/kg. Fe values below about 200 mg/kg fall within the safe wear region, where corrosive attack remains limited. Once Fe crosses this threshold, wear accelerates sharply, indicating that the liner surface is exposed to active corrosion. At the same time, BN depletion into the low range (approximately 0–10 mg KOH/g) shows that the oil’s neutralizing capacity is no longer sufficient. A stable BN window of about 10–25 mg KOH/g correlates with controlled Fe levels. When Fe rises above 200 mg/kg while BN drops into the red zone, the engine has entered a critical corrosion condition requiring immediate lubrication adjustments.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "86342598-bc5d-5e5d-8f9e-4ee1541ed092",
+          "page": 337,
+          "title": "Operation on max. 0.50% sulphur fuels. Page 4 of 7",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "f41cde65-961f-5a36-a6d4-8b08e9b863ce",
+          "page": 331,
+          "title": "operation condition, 0-200 Fe (mg/kg). When the Fe concentration exceeds 200 mg/kg (the red bar), the wear or",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4bab6c13-3064-5c3a-a18d-83a265e8bdad",
+          "page": 314,
+          "title": "part load, has led to increased water and acid condensa-",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "Fe_BN_vs_ACC_Page314",
+          "title": "Fe & BN vs ACC Factor (Safe and Critical Regions)",
+          "caption": "Diagram showing Fe mg/kg entering the critical region above ~200 mg/kg while BN trends indicate remaining neutralisation capacity, illustrating the safe-to-critical corrosion transition.",
+          "url": "/schemas/original/doc_1765228283/page_314_schema_0.png",
+          "page": 314,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Explain how piston rings achieve gas sealing in main engine and what conditions are required for optimal sealing.",
+    "answer": {
+      "answer_text": "Piston rings seal combustion gas by using the gas pressure acting above and behind each ring. This pressure forces the ring down into its groove and outward against the liner surface, closing the clearance between piston and liner and forming a dynamic seal during the stroke. The seal depends on the ring’s ability to respond instantly to pressure changes and maintain uniform contact with the liner.\n\nOptimal sealing requires: \n- correct geometry of rings, ring grooves and the cylinder liner, ensuring proper contact and load distribution; \n- free axial and radial movement of each ring in its groove so the ring can follow piston motion without sticking; \n- clean ring grooves with correct clearances, verified through inspection, to avoid carbon packing and impaired ring mobility; \n- adequate lubrication to stabilise the oil film, limit wear and prevent scuffing, as lubrication quality directly influences the ring’s ability to maintain a tight gas seal.\n\nThese conditions ensure stable sealing, controlled wear and minimal blow-by throughout operation.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "7a2652b6-2e30-5ee1-9278-fba020ad2c6e",
+          "page": 405,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4c598a55-b9eb-56eb-95fe-5281f9690d87",
+          "page": 349,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Explain how to assess the condition of the scavenge receiver based on visual inspection and what operational conclusions can be drawn from cases with no sludge, normal sludge, and heavy sludge.",
+    "answer": {
+      "answer_text": "The scavenge receiver is assessed by performing a standard internal visual inspection: open and secure access covers, block the starting-air system, open indicator valves, ventilate the receiver, ensure lighting, and enter only after confirming safe conditions. Once inside, the inspector evaluates deposits, general cleanliness, and consistency of oil and carbon accumulation.\n\nThe inspection images on page 366 define three assessment categories:\n- No sludge (NO SLUDGE): A very clean receiver may indicate washing caused by a defective water mist catcher, rather than excellent cylinder condition. This requires checking the mist catcher function.\n- Normal sludge (SLUDGE – S): Considered a normal condition and indicates healthy cylinder performance and balanced lubrication.\n- Heavy sludge (MUCH SLUDGE – MS): Indicates excessive oil and carbon accumulation. The required operational action is to remove the sludge and deposits, as they impair scavenging and increase fire risk.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "fd114200-f7f7-5fed-84e6-7007acf3a6d8",
+          "page": 366,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ec41e730-0aec-5c24-9643-a4d1c2083963",
+          "page": 365,
+          "title": "Procedure",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "scavenge_receiver_sludge_conditions_366",
+          "title": "Scavenge receiver sludge conditions",
+          "caption": "Illustrations showing no sludge, normal sludge, and heavy sludge conditions inside the scavenge receiver.",
+          "url": "/schemas/original/doc_1765228283/page_366_schema_0.png",
+          "page": 366,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Explain why piston crown lands may show carbon build-up even when lubrication feed rates are nominal.",
+    "answer": {
+      "answer_text": "Carbon build-up on piston crown lands can occur even when lubrication feed rates are nominal because the primary cause is not oil quantity but insufficient gas sealing at the piston rings. When a ring does not seal correctly, combustion gases pass behind it and deposit carbon on the ring-land area. MAN specifies that carbon accumulated on the land above a piston ring indicates poor gas sealing at that ring. Restricted ring movement, carbon in the grooves, or incorrect groove clearances reduce the pressure transfer behind the ring and lower its outward sealing force, allowing blow-by and deposit formation.\n\nAdditional combustion-related factors can worsen the deposits regardless of oil feed rate. Faulty fuel valves or insufficient turbocharger performance may overheat or disrupt the cylinder oil film on the crown and ring lands, promoting hard carbon formation. Thick, polished deposits may locally wipe away the oil film, increasing the risk of bore polishing, micro-seizure and accelerated wear. The piston cleaning ring normally removes excess deposits, but when blow-by and abnormal combustion dominate, deposits can exceed normal levels even with correct lubrication.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "e2e84fe9-8581-561f-bfc1-d92430c67ef3",
+          "page": 370,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "31d2a3d9-5a16-5696-9eb9-1108bc6995c0",
+          "page": 370,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What actions are recommended if repeated high liner temperature alarms originate from a single cylinder unit?",
+    "answer": {
+      "answer_text": "If repeated high liner temperature alarms originate from a single cylinder unit, the first action is to check the cylinder condition on that unit by a scavenge port inspection at the next convenient opportunity, paying special attention to the CPR ring lock area. If the temperature pattern and inspection indicate scuffing, cylinder lubrication for the affected unit must be increased and the load and Pmax for that cylinder reduced. Lubrication is adjusted according to drawing 2255-0125, and the unit load is reduced via the Chief Limiter screen on the MOP as described in 6645-0250.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a337964f-0351-5ee7-8078-1aa06dcb4e18",
+          "page": 411,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a19c2ace-7344-5136-ab5a-37b9bf0223b3",
+          "page": 411,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Describe the main steps and limitations for grinding the exhaust valve spindle seat according to the instructions.",
+    "answer": {
+      "answer_text": "Before grinding, the spindle is mounted in the grinding machine and trued up with a dial gauge positioned just inside the inner-contact area to within a maximum run-out of 0.05 mm. Grinding is then carried out in small depth steps, typically up to 0.2 mm at a time, following the machine supplier’s manual. The aim is to remove blow-by marks and reduce individual dent marks to less than 2 mm in diameter while grinding as little as possible. Preventive grinding should not exceed 0.5 mm in depth, and the total grinding depth must not surpass the maximum limit G1 given in the work card, currently 2 mm for MAN B&W 30–98 bore engines. If acceptable surface condition cannot be achieved within this depth, MAN Energy Solutions must be consulted about further reconditioning.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "sec-2245-0200-0004-p26",
+          "page": 26,
+          "title": "Grinding the Spindle Seat - Procedure and Limits",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What is acceptable and non-acceptable wet appearance in the gas duct?",
+    "answer": {
+      "answer_text": "Acceptable wet appearance includes a thin coke film on the exhaust valve spindle guide and bottom piece, as well as the typical trumpet-shaped carbon deposits on the fuel nozzle tip that form during HFO operation. These deposits are normal and do not indicate malfunction. Limited wet appearance may also occur after overhaul before the sealing surfaces have bedded in. In contrast, non-acceptable wet appearance is characterised by visible oil leakage inside the gas duct, such as oil on the vane wheel or oil on the spindle seating disc. These traces indicate malfunction of the exhaust valve sealing or guide area and require inspection and possible overhaul of the valve assembly.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "3e58db02-1189-5d51-850c-8f4ac785ac33",
+          "page": 436,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "1cc5f2e4-3416-5507-b7c3-be7bf6b832d5",
+          "page": 438,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "b4dcd85a-cbe5-5f9a-b538-cdcb4f48daf7",
+          "page": 437,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "95c13859-c2d0-55eb-8e7a-c35d858a897d",
+          "page": 439,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "gas_duct_nonacceptable_top_oil",
+          "title": "Non-acceptable wet appearance – oil on gas duct wall",
+          "caption": "Gas duct with heavy oil on the wall and around the spindle guide indicating excessive oil leakage.",
+          "url": "/schemas/doc_1765228283/page_436_schema_0.png",
+          "page": 436,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "gas_duct_nonacceptable_spindle_disc",
+          "title": "Non-acceptable wet appearance – oil on spindle seating disc",
+          "caption": "Oil and wet deposits on the upper part of the spindle indicating leakage past the guide or seals.",
+          "url": "/schemas/doc_1765228283/page_436_schema_2.png",
+          "page": 436,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "gas_duct_acceptable_wet",
+          "title": "Acceptable wet appearance after overhaul",
+          "caption": "Thin coke film and limited wetness on the guide and housing, considered normal.",
+          "url": "/schemas/doc_1765228283/page_437_schema_0.png",
+          "page": 437,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "gas_duct_acceptable_clean",
+          "title": "Acceptable appearance - mainly dry duct",
+          "caption": "Mostly dry gas duct with only light coke film and no free oil.",
+          "url": "/schemas/doc_1765228283/page_435_schema_1.png",
+          "page": 435,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "During a period of extended low-load operation, an increase to 85% load is planned. Describe how LWM setpoints should be adapted to avoid false alarms and what temporary behaviour of liner temperatures is expected.",
+    "answer": {
+      "answer_text": "When increasing engine load after running for an extended period at low load, the LWM setpoints must be readjusted to prevent false alarms. Tmax must be reset to match the new load level, and both Tmax and ΔTmaxdev must be placed as low and as close to the actual sensor temperature band as possible to avoid premature triggering. At low loads, ΔTmaxdev must be reduced because the allowed deviation between sensors is naturally smaller.\n\nAfter prolonged low-load operation, a short period of temperature instability must be expected when load is increased to 85%. This is caused by rapid changes in piston ring geometry and contact conditions, and the pattern and magnitude of the temperature fluctuations cannot be predicted. Temperatures may oscillate for a short period until stability is restored.\n\nIn practice, Tmax is set slightly above the observed temperature peak (for example peak + 5 °C), and ΔTmaxdev is set slightly above the observed peak-to-average difference to provide margin for transient spikes during load changes.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a19c2ace-7344-5136-ab5a-37b9bf0223b3",
+          "page": 412,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a337964f-0351-5ee7-8078-1aa06dcb4e18",
+          "page": 411,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "13976bbe-f1b1-5ad0-8709-2e76f6862b45",
+          "page": 411,
+          "title": "An example of alarm set points in service:",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "tbl-lwm-definitions",
+          "title": "Alarm set point definitions",
+          "caption": "Definitions of Tmax, ΔTmaxdev, Tmax alarm delay and Tcutout.",
+          "url": "/tables/original/doc_1765228283/page_411_llm_178_208_tbl.png",
+          "page": 411,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 4,
+          "cols": 2
+        },
+        {
+          "table_id": "tbl-lwm-seatrial",
+          "title": "Default sea trial values",
+          "caption": "Default setpoints for Tmax, ΔTmaxdev, Tmax alarm delay and Tcutout, used as baseline reference before tuning.",
+          "url": "/tables/original/doc_1765228283/page_411_llm_177_316_tbl.png",
+          "page": 411,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 4,
+          "cols": 2
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How to check the exhaust valve's ability to remain closed during pre-mounting preparation?",
+    "answer": {
+      "answer_text": "Before installing an overhauled exhaust valve, confirm that the air cylinder can keep the valve fully closed for at least 15 minutes. Fill the bottom chamber with oil if the level is low, connect the 7-bar working air, and secure the bottom piece retaining tools before lifting. The valve must not drift open; if it does, the sealing rings require inspection or running-in time.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "15b603fc-e949-582b-8028-4d83517034bd",
+          "page": 503,
+          "title": "34 (42)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "f39be782-c6f0-560e-ae72-2f1e8869c85b",
+          "page": 504,
+          "title": "35 (42)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How to avoid unintended exhaust valve opening during lubricating oil pump start-up?",
+    "answer": {
+      "answer_text": "The air springs must be pressurised before oil supply is activated. If lubrication pumps start first, the actuator may move the valve open, causing starting problems. Pressurise air springs immediately, stop the lube oil pumps, and drain the actuators if a reset is required.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "08ec41fd-c4c9-53f6-bc17-0a753860b18e",
+          "page": 510,
+          "title": "41 (42)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6ff0d948-6fda-5fc2-928d-7770c7cd7b95",
+          "page": 511,
+          "title": "Safety Precautions",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How must new piston rings be oriented during mounting to ensure proper running-in?",
+    "answer": {
+      "answer_text": "Use expanders to avoid deformation, mount rings with TOP marks upwards, stagger the gaps 180°, and if CPR-CL types are installed, alternate left-hand and right-hand cuts. For engines with four grooves but three rings, use only the three upper grooves.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c27b9f49-ecc9-5e28-b2d4-c80e74908597",
+          "page": 560,
+          "title": "21 (29)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "piston_ring_orientation",
+          "title": "Piston ring orientation during mounting",
+          "caption": "Diagram showing correct piston ring orientation with TOP marks upwards and staggered gaps.",
+          "url": "/schemas/original/doc_1765228283/page_560_schema_0.png",
+          "page": 560,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "When preparing for scavenge port inspection, what air and water conditions must be maintained?",
+    "answer": {
+      "answer_text": "Before entering the scavenge air receiver, keep cooling water and cooling oil circulating to reveal any leakages from the crown or cover. Block starting air, open indicator valves, and secure the receiver access cover in the open position.",
+      "citations": [],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "899d02652882ddd38d7b41ca",
+          "title": "Table - Page 540",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_540_region_89_92_tbl.png",
+          "page": 540,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 43,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How should torque specifications from the piston data sheet be applied when tightening piston rod/crosshead connections?",
+    "answer": {
+      "answer_text": "Use either the direct torque value of 540 Nm or the alternative tightening method of 100 Nm plus a 77° angle. Follow the specified tightening template and ensure the threads are clean and lubricated where required.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "984a126d-6282-5dbe-bf4a-7dfc01afb37f",
+          "page": 537,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "tbl_piston_torques",
+          "title": "Piston torque values",
+          "caption": "Table listing torque and angle specifications.",
+          "url": "/tables/original/doc_1765228283/page_537_region_177_399_tbl.png",
+          "page": 537,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 12,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "How should the piston tilting tools be used to tilt a piston safely during overhaul?",
+    "answer": {
+      "answer_text": "First prepare the piston for lifting. Turn the piston to TDC so the crown is clear of the liner, clean the lifting groove and mount the normal piston lifting tool so the claws fully enter the lifting grooves and the crane hook is correctly seated on the tool dowel pin. [Main Engine Vol 1 | Piston — Dismantling — Piston lifting tool | Page 551]\n\nLift the piston out of the cylinder liner and guide the piston rod foot through the stuffing box flange. Always use lifting gear with sufficient SWL and keep clear of the piston during the lift. If long distance pieces are fitted for the stuffing box, the piston rod foot can pass between two cylinder cover studs. Place the two halves of the piston support tool around one of the openings in the platform, lower the piston rod foot and stuffing box through the opening, secure the two support halves with screws and lower the piston until it rests on the piston rod flange. The piston and support must not be left on the gallery during engine operation. [Main Engine Vol 1 | Piston — Dismantling — Piston lift and support (T22-078) | Page 552]\n\nFor tilting, lower the piston rod foot onto a wooden block and land the piston crown on a wooden block on the platform so the lifting tool can be removed. Attach the lifting bracket to the bottom of the piston rod foot and hook the crane onto the lifting bracket. Lift the piston rod foot clear of the wooden block and keep lifting until the piston rod is vertical. During this lift, follow with the crane so the hook remains vertically above the lifting point and ensure the stuffing box has been removed beforehand to avoid damage. [Main Engine Vol 1 | Piston — Overhaul — Piston turning | Page 561]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a7e19964-c1db-5bc1-a40e-6a6eb5b7ee4f",
+          "page": 551,
+          "title": "Piston — Dismantling — Piston lifting tool",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "515a22b6-d1ff-521e-9294-76e718650c6f",
+          "page": 552,
+          "title": "Piston — Dismantling — Piston lift and support (T22-078)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "2ea11e5a-f59b-5a3a-8994-5bf383d1e32a",
+          "page": 561,
+          "title": "Piston — Overhaul — Piston turning",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "fig_piston_support_T22-078",
+          "title": "Piston lift and support arrangement (T22-078)",
+          "caption": "Diagram showing the piston being lifted out of the liner and lowered onto the two-part support tool through the platform opening.",
+          "url": "/schemas/original/doc_1765228283/page_552_schema_1.png",
+          "page": 552,
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "schema_id": "fig_piston_turning",
+          "title": "Piston turning with lifting bracket",
+          "caption": "Sequence illustrating the piston on wooden blocks, mounting of the lifting bracket on the piston rod foot and lifting the rod to a vertical position.",
+          "url": "/schemas/original/doc_1765228283/page_561_schema_1.png",
+          "page": 561,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": [
+        {
+          "table_id": "tbl_piston_support_tool_items",
+          "title": "Piston support and lifting equipment",
+          "caption": "Extract from the tool list showing the designated piston support tool and associated lifting gear for piston handling.",
+          "url": "/tables/original/doc_1765228283/page_552_region_148_96_tbl.png",
+          "page": 552,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 8,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "mixed",
+      "expected_tools": [
+        "qdrant_search_schemas",
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What are the acceptable limits for water content in system lubricating oil?",
+    "answer": {
+      "answer_text": "For system lubricating oil, the water content should not significantly exceed the saturation point of about 0.2% by volume; for short periods up to 0.5% may be tolerated. If water content is higher, tin-aluminium crosshead bearings with a lead overlay are especially vulnerable. Excessive water causes rapid corrosion of the lead overlay, after which the underlying bearing material is exposed and wear accelerates dramatically. Main and crankpin bearings, whether white metal or tin-aluminium, can also suffer irreparable damage from water contamination, but the damage mechanism is less acute than for crosshead bearings. To prevent this, a Water in Oil Monitoring system continuously measures water activity in the oil and is connected to the alarm system. [Main Engine Vol 1 | Bearings Description – Water in Oil Monitoring | Page 6]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "b8767b49-9c9f-5328-a76d-08348abf2a1e",
+          "page": 671,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "When installing an indicator valve, which components are used to connect a pressure transducer for cylinder pressure measurements?",
+    "answer": {
+      "answer_text": "Pressure transducer; Extension; Stud; Nut; Flange; Packing(s); Connector, heavy duty; Cap nut; Indicator cock / valve; Insulation pad; Plate (indicator valve) [Main Engine Vol 1 | Section: 1 (2) | Page 662]",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6796bb10-e241-53b7-815a-60c2bd1165bf",
+          "page": 662,
+          "title": "1 (2)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "tbl_indicator_valve_items",
+          "title": "Indicator valve – item list",
+          "caption": "Table listing item numbers used to connect the pressure transducer.",
+          "url": "/tables/original/doc_1765228283/page_662_region_157_90_tbl.png",
+          "page": 662,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 10,
+          "cols": 3
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_text",
+        "qdrant_search_tables"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Crosshead overlayer exposure is measured at 10,000 mm² for an S50ME-B9 engine. Is this acceptable?",
+    "answer": {
+      "answer_text": "The acceptance table lists a maximum of 11,200 mm² for S/G50ME-B9. The measured value is within limit, but the bearing should still be monitored and re-checked if wear progresses.",
+      "citations": [],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "8ec2138e9187933165ebfc18",
+          "title": "Table - Page 713",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_713_region_46_106_tbl.png",
+          "page": 713,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 16,
+          "cols": 2
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "neo4j_entity_search"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Crosshead movement feels jerky when turning gear is engaged. What components should be inspected first?",
+    "answer": {
+      "answer_text": "Jerky crosshead movement during turning usually indicates increased friction or early-stage bearing distress. The mechanic should check the following in sequence:\n- Condition of the lower crosshead bearing shell, including oil outlet grooves and contact patterns.\n- Vertical top clearance of the crosshead bearing to confirm it is within allowable limits.\n- Bearing shell sides for squeezed-out or displaced white metal indicating overload.\n- Guide shoes and guide strips for uneven polishing, scratches, or areas of high friction.\n- Sump area (oil pan) for presence of bearing-metal fragments, which typically originate from edge break-off.\n\nThe wear characteristics and failure indicators for these components are listed in the referenced bearing description table, which helps determine whether the symptoms relate to lubrication failure, misalignment, or progressive surface damage.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6bbad4f6-1ea4-55cf-907e-9f3db4eaef09",
+          "page": 675,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "During crankcase inspection, metal flakes are discovered in the oil pan. How to identify which bearing is failing?",
+    "answer": {
+      "answer_text": "Thin white-metal flakes indicate edge chipping of a bearing shell. The mechanic should perform edge-checking on all main, crankpin, and crosshead bearings. Damaged bearings show sharp steps or chipped areas along edges. If metal is thicker, inspect guide shoes as well.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ca6856c9-2752-53b6-a1a3-376d0576c2e0",
+          "page": 761,
+          "title": "1 (30)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Where exactly should the dial gauge be positioned when preparing to take crankshaft deflection readings?",
+    "answer": {
+      "answer_text": "Place the dial gauge axially in the crank throw, opposite the crankpin, with the gauge tip resting on the marked measuring surface. The correct mounting point is identified by punch marks on the crank throw. The gauge must be oriented so its spindle is perpendicular to the throw surface; otherwise the deflection values will be distorted. After mounting, rotate the crank to B1 at BDC and set the dial gauge to zero before taking readings at B1, M, T, E and B2.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "0440f13c-7267-5e61-bb51-128fcd7d4bb3",
+          "page": 685,
+          "title": "Procedure",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ca6856c9-2752-53b6-a1a3-376d0576c2e0",
+          "page": 762,
+          "title": "1 (30)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [
+        {
+          "schema_id": "674a60ff0778bb61ac84bd3f",
+          "title": "Schema - Page 763.1",
+          "caption": "Checking",
+          "url": "/schemas/original/doc_1765228283/page_763_schema_1.png",
+          "page": 763,
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "schema",
+      "expected_tools": [
+        "qdrant_search_text",
+        "qdrant_search_schemas"
+      ],
+      "has_entity": false,
+      "has_schema": true,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Overheating occurred at a crankpin bearing during continuous running. What diagnostic steps are required?",
+    "answer": {
+      "answer_text": "Start by measuring the crankpin bearing clearance using a feeler gauge at the bottom of the bearing shell on both sides. Compare the measured clearance with the values in the Adjustment Sheet (see Table 1). If the difference between the actual clearance and the recorded or new-bearing clearance exceeds 0.1 mm, the bearing must be dismantled for inspection.\nInspect the bearing cap and bearing shell once the bearing cap has been landed carefully on a wooden plate in the oil pan. Examine the bearing shell for wiped areas, overheating signs, discoloration or bearing metal displacement. If the bearing shell requires replacement, remove the complete bearing cap and use tackles both inside the frame box and outside the crankcase to lift the cap out. \nAdditionally, check the oil pan and filters for bearing metal fragments and perform bearing-edge checks to identify the damaged unit. Afterwards, take crankshaft deflection readings under nearly identical temperature and load conditions to determine whether the crankshaft has distorted due to the bearing failure.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "41a097a9-fd9e-5d91-8bc7-9b1afa0f9eef",
+          "page": 744,
+          "title": "1 (15)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ca6856c9-2752-53b6-a1a3-376d0576c2e0",
+          "page": 761,
+          "title": "1 (30)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "5d400e46-a125-57fd-ad48-846a67ccf7f0",
+          "page": 747,
+          "title": "4 (15)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "905f9de2caf00fef374eac51",
+          "title": "Table - Page 744",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_744_region_82_95_tbl.png",
+          "page": 744,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 28,
+          "cols": 4
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What steps must be followed when pulling out the lower journal bearing shell to prevent it from sticking or falling?",
+    "answer": {
+      "answer_text": "Before pulling the lower shell, any locating screws must be removed. The dismantling tool is then fitted on top of the lower shell and connected to a 0.5-tonne tackle. While the shell is being pulled around and up over the journal, a foot or hand should lightly tension the wire rope to sense if the shell sticks. The shell is only pulled with a maximum tackle capacity of 0.5 tonne to avoid deformation. After the shell has been rotated onto the journal, it is lifted out of the engine with the designated lifting tool, and the crankshaft lifting tools must remain in place until the lower shell is re-installed.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4bf34867-0637-5712-a5fe-1fd89bbc8bde",
+          "page": 803,
+          "title": "10 (17)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "0f4fd031-923c-50f1-8e1e-d742478bd1f1",
+          "page": 806,
+          "title": "13 (17)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "85da1792-ecf5-5575-9a8e-ea80d0265bd3",
+          "page": 803,
+          "title": "0.5 tonne.",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "In the cylinder lubrication description, how is the minimum cylinder oil feed rate defined, and what is the recommended way to optimise it in service?",
+    "answer": {
+      "answer_text": "The minimum cylinder oil feed rate is defined as 0.6 g/kWh, which is the amount required to provide sufficient lubrication for all parts. Increasing the feed rate above the optimum does not significantly increase the oil film thickness once the optimum point has been reached. In service, the recommended method of optimisation is to monitor cylinder condition continually through scavenge port inspections and drain-oil analysis. By correlating observed wear, deposits and corrosion with feed rate and fuel sulphur content, the crew adjusts the dosage so that consumption is minimised while maintaining safe wear margins.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "9d41591b-6a61-58ef-bd1d-abf4a1c201e3",
+          "page": 841,
+          "title": "The purpose of cylinder lubrication is as follows:",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "What is the principle of the Automated Cylinder Oil Mixing (ACOM) system and how does it adapt cylinder oil BN to fuel sulphur content?",
+    "answer": {
+      "answer_text": "The ACOM system automatically mixes two fully formulated cylinder oils of different BN values to achieve an optimal BN that matches the sulphur content in the fuel. The engine control system receives the sulphur content of the fuel, or calculates the Sulphur Equivalent (Se) in gas-mode operation based on engine load, pilot-oil quantity and pilot-fuel sulphur content. Using this Se value, the ACOM adjusts the mixing ratio of the two stored cylinder oils so that the blended oil has the BN required for the actual sulphur level. Mixing volumes are kept small to enable rapid changeover when the fuel sulphur content changes, and the system is located near and above the engine cylinder-oil inlet flange so that gravity feed can be used.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "9a878db4-49ac-509b-9a62-1d6349f24380",
+          "page": 846,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ca765ad9-c852-5217-91cf-87455f345b19",
+          "page": 845,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What actions must be taken if lubricating oil pressure falls below the specified limits during engine operation?",
+    "answer": {
+      "answer_text": "If the lubricating oil pressure drops below the specified levels, the engine’s safety system will automatically reduce speed to slow-down level and eventually stop the engine when the shut-down pressure is reached. The mechanic must identify and rectify the cause of the pressure loss, with particular attention to clogged filters due to worn bearings. The crankcase and oil pan should be inspected for traces of melted white metal. After corrective actions, the mechanic must perform repeated temperature and condition checks of the bearings 15–30 minutes after restart, one hour after, and again at full load to confirm that all bearings are operating normally.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "90e0e294-ef61-5997-82c6-4c3967ee9f60",
+          "page": 850,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "During flushing of the main lubricating oil system, which engine components must be bypassed with blanks?",
+    "answer": {
+      "answer_text": "When flushing the main lubricating oil system, the main bearings, crossheads, thrust bearing, turbochargers, axial vibration damper, torsional vibration damper (if fitted), moment compensators and chain drive must all be bypassed using special blanks. These sensitive components must be protected because flushing with high-velocity oil and a fine flushing filter is intended to remove welding residues, oxide scale and other abrasive particles from the piping and coolers. Allowing this contaminated oil to pass through the bearings and dampers could introduce debris directly into the running surfaces and lead to premature bearing damage.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "557f5be5-dc18-582f-af55-0dcee23ccf8c",
+          "page": 853,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What troubleshooting steps should be performed when the Fuel Oil Pump cannot maintain the commanded injection pressure at low engine load?",
+    "answer": {
+      "answer_text": "Begin by ensuring the engine is placed in the correct safety and isolation condition as defined in the preparation table (page 566). Fuel oil, lubricating oil, hydraulic power supply and associated auxiliary systems must be properly shut off or set in stand-by to eliminate external influences on pressure regulation. After confirming these prerequisites, verify that the fuel supply pressure is stable and that no air is present in the suction side. Inspect filters and strainers and ensure that the circulating and control systems are not affected by conditions listed in the same table, as they directly impact injection behavior. If commanded injection pressure remains too low, inspect the pump element for internal leakage, verify sealing integrity, and ensure temperature-dependent viscosity is within acceptable operating limits. Any component showing wear or leakage must be repaired or replaced based on the findings.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ef486178-7578-536a-a511-48f770c1a2ef",
+          "page": 566,
+          "title": "Safety Precautions",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "4d996fe3-f654-54b1-949b-3f1b1235a0ca",
+          "page": 581,
+          "title": "Safety Precautions",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "51255e62-a04a-5020-931c-534b6be931f7",
+          "page": 612,
+          "title": "2 (2)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "ee8ed5e235532612e07bc2cf",
+          "title": "Table - Page 583 (LLM)",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_583_llm_118_124_tbl.png",
+          "page": 583,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 15,
+          "cols": 4
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Air leaks are heard around the Air Valves in the control-air manifold. Describe the diagnostic procedure.",
+    "answer": {
+      "answer_text": "Follow the standard valve-checking procedure: place the engine in stand-by mode with indicator cocks open and personnel positioned as required. Disconnect and plug the closing-air line at the slow-turning valve and manually open the valve while observing the indicator cocks. Any air discharge indicates leakage past the starting-air valves and requires overhaul. Rotate the engine 180° and repeat the procedure to confirm leakage under a second crank position. Next, verify correct pilot-air actuation by selecting channel 50 from the ECR while observing spring movement in the valve. If irregular motion or air leakage persists, follow the removal steps shown in the referenced work card: remove control-air and main-air connections, shut off the exhaust-valve air supply, and disconnect electrical connections from the control block. Components showing sticking, worn sealing surfaces or incorrect response must be cleaned, inspected and reassembled or renewed in accordance with the work instructions.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6bbad4f6-1ea4-55cf-907e-9f3db4eaef09",
+          "page": 673,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "1c77afef-a885-5f8b-ba09-5f477554669f",
+          "page": 915,
+          "title": "Procedure to check valves",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "68529aca-e4a7-5f2f-8f28-38c4a20b8754",
+          "page": 916,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "bfdb90e7822391e5b78e0a2c",
+          "title": "Table - Page 517",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_517_region_61_91_tbl.png",
+          "page": 517,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 16,
+          "cols": 5
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "qdrant_search_text"
+      ],
+      "has_entity": false,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Bearing temperatures on the Met Turbocharger rise during high load. What maintenance and inspection steps are required?",
+    "answer": {
+      "answer_text": "Begin by checking the circulating-oil system parameters as listed in the maintenance table (page 862). Ensure the turbocharger receives correct oil pressure, flow and temperature, as reductions in any of these will cause bearing overheating. Review oil-quality properties in the analysis table (page 837): high TAN or SAN levels, water contamination, elevated insolubles or ash content, and excessive BN can all reduce oil film integrity and lead to rising bearing temperatures. Inspect filters, coolers and circulation paths for blockage. Verify that oil return lines are free of restrictions and that no sludge or lacquer deposits—referenced in the BN and insoluble descriptions—have accumulated. If temperatures remain high, inspect the bearing seats and lubrication passages for wear or fouling, clean or recondition them as specified, and reassemble with correct lubrication prior to restart.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "50f97b80-a882-58f4-9361-2872ef8bb7b7",
+          "page": 862,
+          "title": "Maintenance of Circulating Oil System",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "535ea0e6-92ff-58e0-b735-bf88e5476f9c",
+          "page": 864,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "557f5be5-dc18-582f-af55-0dcee23ccf8c",
+          "page": 852,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": [
+        {
+          "table_id": "b1e3e16545fa8e7ab7f9dff7",
+          "title": "Table - Page 837",
+          "caption": "",
+          "url": "/tables/original/doc_1765228283/page_837_region_54_109_tbl.png",
+          "page": 837,
+          "doc_title": "Main Engine Vol 1",
+          "rows": 25,
+          "cols": 4
+        }
+      ]
+    },
+    "expected_type": {
+      "primary_type": "table",
+      "expected_tools": [
+        "qdrant_search_tables",
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": true
+    }
+  },
+  {
+    "question": "Recommendations for checking the under-piston?",
+    "answer": {
+      "answer_text": "Open and secure the scavenge air receiver access cover and, if needed, use the cleaning cover on the manoeuvring side for an additional viewing angle. Keep cooling water and lubricating oil circulating during the inspection to detect leakages from the piston or cylinder cover. Turn the engine at least half a revolution and begin the inspection with a unit positioned just above the scavenge ports. Inspect the piston rod, lower cylinder wall, piston skirt, piston rings, ring lands, and the piston top as the piston moves downwards. Examine each ring individually and document wear, damage or sticking.\n\nTo evaluate the piston's alignment and under-piston clearances, read the digital dial gauge installed under the piston skirt and record the clearance between the piston skirt and the liner. Use these readings to determine piston inclination (R1 − R2) and adjust guide-strip clearance to achieve symmetrical alignment relative to the skirt–liner clearance. Maintain parallelism between guide strip and guide within 0.2 mm per 1000 mm. These measurements help confirm correct piston centering and condition of the under-piston area.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "699e207d-3b85-595a-afba-92d89fbe4833",
+          "page": 539,
+          "title": "1 (29)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "135facef-9c3d-58e3-8997-a02241d3a825",
+          "page": 212,
+          "title": "7 (8)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "How to test and check stuffing box?",
+    "answer": {
+      "answer_text": "Begin by inspecting the piston rod surface. Minor longitudinal scratches must be smoothed with a fine-grained carborundum stone, while coarse scratches require machine grinding. Lubricate the piston rod with molybdenum disulphide (MoS₂) in the area where the stuffing box ring units will be positioned. Clean the stuffing box housing halves thoroughly to remove oil and carbon residues. Assemble the ring units, check and correct their alignment, fit the O-rings, and land the stuffing box on the flange ensuring that the holes in the stuffing box and flange are correctly centred. Tighten the fitted bolts and standard bolts to the specified torque. After mounting, lubricate the piston rod again with MoS₂, turn the engine a few revolutions to seat the rings, then run the engine at very slow or idle speed for approximately fifteen minutes. Stop the engine and inspect the stuffing box and piston rod for correct seating, absence of rubbing, and uniform lubrication.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "9ae8480c-ddf8-5d8e-b584-238c8ed786dd",
+          "page": 577,
+          "title": "6 (12)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "e82ecf2a-323e-513c-afbe-1df4c211d987",
+          "page": 578,
+          "title": "7 (12)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "ec472e15-2a25-5240-9cad-0b9c106e938b",
+          "page": 580,
+          "title": "9 (12)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "88cf702f-c215-58d0-95ab-e3da19423af8",
+          "page": 582,
+          "title": "11 (12)",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "What steps must be followed to inspect the XH Bearings after a vibration event?",
+    "answer": {
+      "answer_text": "Begin by carrying out an open-up inspection and record the hydraulic pressure at the moment the bearing cap nuts begin to loosen. Clean the running surfaces of the journal and the bearing shell thoroughly using a clean rag and a strong inspection lamp. Evaluate the metal condition and the journal surface according to the inspection guidelines. Examine the XH overlayer for signs of tearing, which will appear as sharply defined borders; small non-interconnecting tears are cosmetic only. Check for wiping, where parts of the overlayer smear out. For XH bearings incorporating a nickel intermediate layer, apply the knife test — the blade should leave only a faint or no mark in the intermediate layer. Upon completing the inspection, document all findings in the engine logbook in accordance with the prescribed recording instructions and drawing 2555-0140.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "79a9f0af-e456-5c25-b7dc-7971be0e6628",
+          "page": 291,
+          "title": "2 (2)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "7117c2b8-53f3-571d-b1a6-4275d96c2a7c",
+          "page": 293,
+          "title": "2 (11)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "bdb264dc-dae2-5bf1-bc18-e837ecbd6b5a",
+          "page": 294,
+          "title": "3 (11)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "9786ba9d-5f0f-5242-b73b-4d51bfce38f2",
+          "page": 708,
+          "title": "4 (7)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c4000e97-64cc-53c5-9d94-a3eae159e7e3",
+          "page": 674,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Provide all references to the Air Filter",
+    "answer": {
+      "answer_text": "All documented references to air filters relate to turbocharger maintenance, pneumatic system filtration, and starting-air pilot valve filtration. They appear in three main contexts: (1) turbocharger performance degradation due to poor TC air filter condition; (2) pneumatic system air filters requiring periodic cleaning or replacement; and (3) air filters associated with the main starting valve and pilot valves, which require washing or replacement as part of the compressed-air system maintenance program.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c34854fc-9c97-5b04-b6c1-14524bfbefa0",
+          "page": 362,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6d45738f-f5b9-5091-8fda-9d61e3e3bce0",
+          "page": 114,
+          "title": "34 - Compressed Air System",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "6dc2a9dc-0810-58c1-86be-06134dfd1fa8",
+          "page": 114,
+          "title": "42 - Fuel Oil System",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Provide all documentation describing the Oil Cooler and extract the venting and cleaning procedures",
+    "answer": {
+      "answer_text": "The documentation describes the oil cooler in relation to flushing, contamination removal, preheating, and venting. Pipes, coolers and tanks must be thoroughly cleaned before filling the system. Flushing is performed using lube-oil centrifuges and fine filters down to 10 μm. During flushing, all system oil must circulate at 60–65°C with turbulent flow (Re ≥ 3000). Several engine components must be bypassed, including bearings, crossheads, turbochargers, torsional dampers and chain drives. Preheating of the circulating oil cooler is done by filling its waterside with fresh water and applying steam. During preheating, the deaerating (vent) pipe must remain open to keep the cooler pressure low. Cleanliness is verified using control bags positioned at the ends of the main lube-oil lines.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "a3d8ec4c-7e23-5dcc-8e41-793f280abd8e",
+          "page": 850,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "557f5be5-dc18-582f-af55-0dcee23ccf8c",
+          "page": 852,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  },
+  {
+    "question": "Show all documentation sections describing the Exhaust Valve",
+    "answer": {
+      "answer_text": "The exhaust valve is documented through work cards, data sheets, and inspection procedures. The material includes tool requirements, dimensional data, valve spindle inspection criteria, controlled oil level description, and operational checks. Key sections cover panel tool listings, exhaust valve data with operational check instructions, replacement-part specifications, and detailed spindle inspection guidance including wear limits and lubrication principles.",
+      "citations": [
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "001f6507-1827-5502-a307-9b3ff8e2cff0",
+          "page": 605,
+          "title": "2 (2)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "8bbd6e10-dd40-57b5-b592-b9b7d1b3a881",
+          "page": 467,
+          "title": "2 (2)",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "14622aae-719e-5cc0-8963-75e9a035e854",
+          "page": 466,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        },
+        {
+          "type": "text",
+          "doc_id": "doc_1765228283",
+          "section_id": "c2be95af-e6f7-5226-a89e-c1da5200f33e",
+          "page": 425,
+          "title": "Description",
+          "doc_title": "Main Engine Vol 1"
+        }
+      ],
+      "figures": [],
+      "tables": []
+    },
+    "expected_type": {
+      "primary_type": "text",
+      "expected_tools": [
+        "neo4j_entity_search",
+        "qdrant_search_text"
+      ],
+      "has_entity": true,
+      "has_schema": false,
+      "has_table": false
+    }
+  }
+]
