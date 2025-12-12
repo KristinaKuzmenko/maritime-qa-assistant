@@ -11,6 +11,7 @@ Evaluates Maritime QA Assistant using:
 
 import json
 import asyncio
+import time
 from typing import List, Dict, Any
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -217,8 +218,10 @@ async def run_agent_on_question(
     :param user_id: User identifier
     :param owner: Owner filter for retrieval
     :param doc_ids: Document IDs to search (optional)
-    :return: Dict with 'answer', 'contexts', 'tools_used', 'query_intent'
+    :return: Dict with 'answer', 'contexts', 'tools_used', 'query_intent', 'latency_ms'
     """
+    start_time = time.time()
+    
     initial_state = GraphState(
         user_id=user_id,
         question=question,
@@ -274,11 +277,14 @@ async def run_agent_on_question(
             # Prefer llm_summary, fallback to text_context
             contexts.append(ctx.get("llm_summary") or ctx.get("text_context", ""))
     
+    latency_ms = (time.time() - start_time) * 1000
+    
     return {
         "answer": result["answer"],
         "contexts": contexts,
         "tools_used": tools_used,
-        "query_intent": result.get("query_intent", "")
+        "query_intent": result.get("query_intent", ""),
+        "latency_ms": latency_ms
     }
 
 
@@ -374,6 +380,31 @@ def prepare_ragas_dataset(
 
 
 # Analysis Functions
+
+def calculate_latency_stats(latencies: List[float]) -> Dict[str, float]:
+    """
+    Calculate latency statistics from list of latencies in milliseconds.
+    
+    :param latencies: List of latencies in ms
+    :return: Dict with avg, median, p50, p95, p99, min, max
+    """
+    if not latencies:
+        return {"avg": 0, "median": 0, "p50": 0, "p95": 0, "p99": 0, "min": 0, "max": 0}
+    
+    import statistics
+    sorted_latencies = sorted(latencies)
+    n = len(sorted_latencies)
+    
+    return {
+        "avg": statistics.mean(sorted_latencies),
+        "median": statistics.median(sorted_latencies),
+        "p50": sorted_latencies[int(n * 0.50)],
+        "p95": sorted_latencies[int(n * 0.95)] if n > 1 else sorted_latencies[0],
+        "p99": sorted_latencies[int(n * 0.99)] if n > 1 else sorted_latencies[0],
+        "min": min(sorted_latencies),
+        "max": max(sorted_latencies)
+    }
+
 
 def analyze_by_question_type(
     eval_data: List[Dict],
@@ -679,6 +710,7 @@ async def evaluate_rag_system(
     contexts_list = []
     tools_usage = []
     query_intents = []
+    latencies = []
     
     for idx, example in enumerate(eval_data, 1):
         question = example["question"]
@@ -703,14 +735,16 @@ async def evaluate_rag_system(
             contexts = result["contexts"]
             tools = result["tools_used"]
             intent = result["query_intent"]
+            latency = result["latency_ms"]
             
             predictions.append(prediction)
             ground_truths.append(ground_truth)
             contexts_list.append(contexts)
             tools_usage.append(tools)
             query_intents.append(intent)
+            latencies.append(latency)
             
-            print(f"   ✅ Answer generated ({len(prediction['answer_text'])} chars)")
+            print(f"   ✅ Answer generated ({len(prediction['answer_text'])} chars, {latency:.0f}ms)")
             print(f"      Citations: {len(prediction['citations'])}")
             print(f"      Figures: {len(prediction['figures'])}")
             print(f"      Tables: {len(prediction['tables'])}")
@@ -731,6 +765,7 @@ async def evaluate_rag_system(
             contexts_list.append([])
             tools_usage.append([])
             query_intents.append("")
+            latencies.append(0)
     
     # Calculate custom metrics
     print("\n" + "=" * 80)
@@ -793,6 +828,20 @@ async def evaluate_rag_system(
     tool_analysis = analyze_tool_usage(eval_data, tools_usage, predictions)
     
     print_tool_analysis(tool_analysis)
+    
+    # Calculate latency statistics
+    print("\n" + "=" * 80)
+    print("⏱️  LATENCY ANALYSIS")
+    print("=" * 80)
+    
+    latency_stats = calculate_latency_stats(latencies)
+    print(f"\n📊 Latency Statistics (ms):")
+    print(f"   Average:    {latency_stats['avg']:.0f} ms")
+    print(f"   Median:     {latency_stats['median']:.0f} ms")
+    print(f"   P95:        {latency_stats['p95']:.0f} ms")
+    print(f"   P99:        {latency_stats['p99']:.0f} ms")
+    print(f"   Min:        {latency_stats['min']:.0f} ms")
+    print(f"   Max:        {latency_stats['max']:.0f} ms")
     
     # Prepare data for RAGAS
     print("\n" + "=" * 80)
@@ -905,6 +954,7 @@ async def evaluate_rag_system(
             "doc_ids": doc_ids,
         },
         "custom_metrics": custom_results,
+        "latency_stats": latency_stats,
         "ragas_metrics": ragas_scores,
         "type_analysis": type_analysis,
         "tool_analysis": tool_analysis,
@@ -919,6 +969,7 @@ async def evaluate_rag_system(
                 "citation_score": citation_scores[i],
                 "tools_used": tools_usage[i],
                 "query_intent": query_intents[i],
+                "latency_ms": latencies[i],
             }
             for i in range(len(eval_data))
         ]
