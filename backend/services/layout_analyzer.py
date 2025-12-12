@@ -69,6 +69,8 @@ class Region:
     region_type: RegionType
     confidence: float
     page_number: int  # zero-based
+    caption_text: Optional[str] = None  # Caption found by YOLO or reclassifier
+    yolo_class_id: Optional[int] = None  # Original YOLO class (0=Caption, 6=Picture, 8=Table, etc.)
 
 
 class LayoutAnalyzer:
@@ -94,8 +96,9 @@ class LayoutAnalyzer:
     
     def __init__(
         self,
-        model_path: str = "../models/yolov10s-best.pt",
-        confidence_threshold: float = 0.4,  # Lower default for better table detection
+        model_path: str = "../models/yolov12s-doclaynet.pt",
+        confidence_threshold: float = 0.4,  # Default for most classes
+        caption_confidence_threshold: float = 0.1,  # Lower threshold for Caption class (0)
         vector_drawing_threshold: int = 100,  # Min drawings to consider page as schema
         iou_threshold: float = 0.4,
     ) -> None:
@@ -103,11 +106,13 @@ class LayoutAnalyzer:
         Initialize layout analyzer.
         
         :param model_path: Path to DocLayNet YOLO model
-        :param confidence_threshold: Minimum confidence for detections
+        :param confidence_threshold: Minimum confidence for most detections
+        :param caption_confidence_threshold: Lower threshold for Caption class (0) detections
         :param vector_drawing_threshold: Min vector objects to treat page as full schema
         :param iou_threshold: IoU threshold for NMS deduplication
         """
         self.confidence_threshold = confidence_threshold
+        self.caption_confidence_threshold = caption_confidence_threshold
         self.vector_drawing_threshold = vector_drawing_threshold
         self.iou_threshold = iou_threshold
         
@@ -156,6 +161,7 @@ class LayoutAnalyzer:
                     region_type=RegionType.SCHEMA,
                     confidence=1.0,  # High confidence for fallback
                     page_number=page_num,
+                    yolo_class_id=None,  # Fallback, not YOLO detection
                 ))
                 logger.info(
                     f"Page {page_num + 1}: YOLO missed schema, "
@@ -203,10 +209,10 @@ class LayoutAnalyzer:
             scale_x = page_width / img_width
             scale_y = page_height / img_height
             
-            # ===== FIX 3: Run YOLO with PIL Image =====
+            # ===== FIX 3: Run YOLO with low threshold to catch Captions =====
             results = self.model.predict(
                 source=pil_image,  # ← Pass PIL Image, not bytes!
-                conf=self.confidence_threshold,
+                conf=self.caption_confidence_threshold,  # Use low threshold
                 iou=self.iou_threshold,
                 verbose=False,
             )
@@ -217,10 +223,18 @@ class LayoutAnalyzer:
             
             result = results[0]
             
-            # Parse detections
+            # Parse detections with per-class confidence filtering
             for box in result.boxes:
                 class_id = int(box.cls[0])
                 confidence = float(box.conf[0])
+                
+                # Apply per-class confidence thresholds
+                if class_id == 0:  # Caption class
+                    if confidence < self.caption_confidence_threshold:
+                        continue  # Skip low-confidence captions
+                else:  # All other classes
+                    if confidence < self.confidence_threshold:
+                        continue  # Skip low-confidence detections
                 
                 # Map to superclass
                 region_type = self.DOCLAYNET_TO_SUPERCLASS.get(
@@ -250,6 +264,7 @@ class LayoutAnalyzer:
                     region_type=region_type,
                     confidence=confidence,
                     page_number=page_num,
+                    yolo_class_id=class_id,  # Save original YOLO class
                 ))
             
             # Log summary

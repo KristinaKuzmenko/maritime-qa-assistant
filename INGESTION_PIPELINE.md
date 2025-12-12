@@ -33,7 +33,12 @@ The Maritime QA Assistant uses a sophisticated multi-stage ingestion pipeline to
 2. Open PDF with PyMuPDF (fitz)
 3. Extract document metadata (title, type, version, language, tags, owner)
 4. Create Document node in Neo4j
-5. Extract table of contents (TOC) for chapter detection
+5. **Extract and parse table of contents (TOC):**
+   - Extract TOC structure using PyMuPDF
+   - Parse hierarchical levels (chapters, sections, subsections)
+   - Map TOC entries to page numbers
+   - Create chapter boundaries from level-1 entries
+   - **Improvement:** Better handling of multi-level TOC structures
 6. Initialize tracking structures (page-to-section mapping, current chapter ID)
 
 **Output:**
@@ -59,84 +64,103 @@ Documents are processed in chunks (50 pages at a time) to handle large files eff
 
 **Output:** List of `Region` objects with initial YOLO predictions
 
-#### Step 2.2: Content-Based Reclassification
+#### Step 2.2: LLM-Based Reclassification
 
-**Purpose:** Override YOLO predictions when content analysis provides stronger signals.
+**Purpose:** Use LLM to validate and refine YOLO predictions for ambiguous regions.
 
-**Classification Logic:**
+**Classification Process:**
 
-For each `TABLE` or `SCHEMA` region:
+For each `TABLE` or `SCHEMA` region with low confidence:
 
-1. **Caption Detection**
+1. **Caption Detection (Enhanced)**
    - Search within 250 pixels above/below region for caption text
-   - Match patterns: "Figure X", "Table X", "Diagram X", "Schema X"
-   - Caption type influences classification
+   - **Improved extraction:** Better handling of multi-line captions
+   - Match patterns: "Figure X", "Table X", "Diagram X", "Schema X", "Drawing X"
+   - Extract caption number and full description
+   - **Fallback:** Use OCR-based text extraction if caption parsing fails
 
-2. **Grid Line Analysis**
-   - Count horizontal/vertical lines in region
-   - Threshold: ≥2 lines → likely table
+2. **LLM Classification (GPT-4o-mini)**
+   - Triggered when YOLO confidence < 0.6
+   - Analyze region image + caption + surrounding text context
+   - Classification prompt asks LLM to determine:
+     - Is this a TABLE (structured data in rows/columns)?
+     - Is this a SCHEMA (diagram, flowchart, technical drawing)?
+   - Returns classification with reasoning
+   - **Benefit:** More accurate than rule-based heuristics, handles edge cases
 
-3. **Drawing Coverage**
-   - Calculate percentage of region covered by vector drawings/paths
-   - Threshold: ≥30% → likely schema
-
-4. **Numeric Density**
-   - Calculate ratio of numeric characters to total text
-   - Threshold: ≥15% → likely table
-
-5. **Structural Patterns**
-   - Detect cell-like text blocks in aligned grid
-   - Detect header row patterns (bold, colored background)
-
-**Decision Tree:**
+**Decision Logic:**
 ```
-Has "Table X" caption AND (has grid lines OR high numeric density OR cell alignment)?
-  → TABLE
-  
-Has "Figure/Diagram/Schema X" caption AND high drawing coverage?
-  → SCHEMA
-  
-Otherwise:
+YOLO confidence ≥ 0.8?
   → Keep YOLO prediction
+  
+YOLO confidence < 0.8?
+  → LLM CLASSIFICATION (GPT-4o-mini)
+     - Analyze visual + textual context
+     - Classify as TABLE or SCHEMA
+     - Override YOLO if needed
 ```
 
-**Output:** Reclassified regions with updated `region_type`
+**Output:** Reclassified regions with updated `region_type` and confidence scores
 
-#### Step 2.3: Smart Region Processing
+#### Step 2.3: Smart Region Processing with Multi-Level Fallbacks
 
-**Purpose:** Extract structured data from each region with intelligent fallback.
+**Purpose:** Extract structured data from each region with intelligent multi-level fallback chain.
 
 **For TABLE regions:**
 
-1. **Primary Extraction** (pdfplumber)
-   - Attempt structured table extraction
+1. **Primary Extraction (pdfplumber)**
+   - Attempt structured table extraction using pdfplumber
    - Parse cell boundaries and text content
    - Generate CSV representation
    
 2. **Quality Validation**
    - Check if extraction produced valid table structure
-   - Verify column/row counts
+   - Verify column/row counts and cell data quality
    
-3. **Fallback to Schema** (if extraction fails)
-   - Capture region as image
-   - Extract surrounding text context
-   - Store as schema instead
+3. **Fallback Level 1: LLM Table Extraction**
+   - If pdfplumber fails, use GPT-4o-mini vision
+   - Render region as image (expand bbox if no caption detected)
+   - LLM extracts table as CSV format
+   - Handles complex layouts pdfplumber misses
+   
+4. **Fallback Level 2: Content Type Verification**
+   - If LLM extraction fails, verify actual content type
+   - Use `region_classifier._llm_verify_type()` to re-classify
+   - May determine region is actually TEXT or SCHEMA
+   
+5. **Fallback Level 3: Alternative Extraction**
+   - If verified as TEXT: Extract text using LLM OCR
+   - If verified as SCHEMA: Extract as image with context
+   - If still TABLE: Mark as failed, skip region
 
 **For SCHEMA regions:**
 
-1. **Hybrid Detection**
-   - Check if schema contains embedded table
-   - Look for table patterns within drawing region
-   
-2. **Extraction**
+1. **Primary Schema Extraction**
    - Capture high-resolution image (original + thumbnail)
-   - Extract caption from surrounding text
+   - Extract caption from surrounding text (±250px)
    - Build context from nearby paragraphs
+   - **NEW:** LLM generates rich description and detects schema type
+
+2. **Embedded Table Detection**
+   - Check if schema contains embedded table (legend, specs, parameter table)
+   - Common in P&ID diagrams, circuit diagrams with component lists
+   - Attempt pdfplumber extraction within schema bbox
    
-3. **Dual Processing** (if embedded table found)
-   - Extract schema as image
+3. **Dual Processing (if embedded table found)**
+   - Extract schema as image with full context
    - Also extract embedded table as structured data
-   - Return both chunks
+   - Create both schema chunk AND table chunk
+   - Link both to same section
+   - **Benefit:** Captures both visual diagram and structured data
+
+**Fallback Chain Summary:**
+```
+TABLE region:
+  pdfplumber → LLM CSV extraction → Content verification → Alternative extraction
+
+SCHEMA region:
+  Image + LLM description → Check for embedded table → Dual extraction if found
+```
 
 **Output:** 
 - `page_schemas` dict: page_num → list of schema chunks
@@ -301,7 +325,14 @@ Otherwise:
 
 **For each schema chunk:**
 
-1. **Neo4j Node Creation**
+1. **LLM-Enhanced Summary**
+   - Generate comprehensive schema description using GPT-4o-mini
+   - **Schema type detection:** Process flow, P&ID, electrical, hydraulic, etc.
+   - Extract key components and connections
+   - Identify system boundaries and interfaces
+   - Build rich semantic description for better search
+
+2. **Neo4j Node Creation**
    ```cypher
    CREATE (s:Schema {
        id: uuid,
@@ -309,6 +340,8 @@ Otherwise:
        page_number: int,
        title: str,
        caption: str,
+       schema_type: str,      // flow/pid/electrical/hydraulic/etc.
+       description: str,      // LLM-generated summary
        file_path: str,        // Original image
        thumbnail_path: str,   // Thumbnail
        bbox: [x1, y1, x2, y2],
@@ -317,10 +350,23 @@ Otherwise:
    })
    ```
 
-2. **Section Linking**
+2. **Section Linking (Enhanced)**
    - Find section on same page (using page-to-section map)
    - If not found, search previous pages
-   - Fallback to last created section
+   - **Visual Section Creation**
+     - If no text section found, create dedicated visual section:
+       ```cypher
+       CREATE (vs:Section {
+           id: uuid,
+           type: "visual",
+           title: schema.caption,
+           content: schema.description,
+           page_start: schema.page,
+           page_end: schema.page
+       })
+       ```
+     - Ensures all schemas/tables are linked to a section
+     - Improves context retrieval for orphan visuals
    - Create relationship: `(Section)-[:CONTAINS_SCHEMA]->(Schema)`
 
 3. **Entity Extraction** (if enabled)
@@ -328,10 +374,26 @@ Otherwise:
    - Create Entity nodes
    - Link: `(Schema)-[:REFERENCES]->(Entity)`
 
-4. **Qdrant Indexing**
-   - Build embedding text: `caption + "\n" + text_context`
-   - Generate embedding
-   - Store in `schemas` collection with metadata
+4. **Qdrant Indexing (Enhanced)**
+   - Build embedding text: `caption + "\n" + schema_type + "\n" + llm_description + "\n" + text_context`
+   - **Improvement:** LLM-generated description provides richer semantic content
+   - Generate embedding (OpenAI text-embedding-3-small)
+   - Store in `schemas` collection with enhanced metadata:
+     ```python
+     {
+         "type": "schema_chunk",
+         "schema_id": str,
+         "doc_id": str,
+         "page": int,
+         "caption": str,
+         "schema_type": str,      # NEW
+         "description": str,      # NEW: LLM summary
+         "file_path": str,
+         "entity_ids": List[str],
+         "system_ids": List[str],
+         "text": str  # Full embedding text
+     }
+     ```
 
 #### Table Processing
 
@@ -354,8 +416,12 @@ Otherwise:
    })
    ```
 
-2. **Section Linking** (same logic as schemas)
+2. **Section Linking (Enhanced)**
    - Page-aware section detection
+   - **NEW: Visual Section Creation** (same as schemas)
+     - If no text section found on page, create visual section
+     - Links orphan tables to dedicated section nodes
+     - Ensures consistent graph structure
    - Create: `(Section)-[:CONTAINS_TABLE]->(Table)`
 
 3. **Table Chunking**
@@ -412,13 +478,20 @@ Otherwise:
 
 ### Stage 8: Entity Extraction and Linking
 
-**Purpose:** Extract maritime domain entities (systems, components) and create graph relationships for entity-based search.
+**Purpose:** Extract maritime domain entities (systems, components, equipment codes) and create graph relationships for entity-based search.
 
-**Note:** Entity extraction happens **during** Stages 5 and 6 (when creating text chunks, schemas, and tables), not as a separate stage. This section documents the extraction logic.
+**Note:** Entity extraction happens **during** Stages 5 and 6 (when creating text chunks, schemas, and tables), not as a separate stage.
 
 #### EntityExtractor Service
 
-The `EntityExtractor` uses a **dictionary-based approach** for consistent entity recognition:
+The `EntityExtractor` uses a **dictionary-based approach** with strict qualifier validation:
+
+**Key Features:**
+- Dictionary-based system extraction (keywords, aliases, abbreviations)
+- Component extraction with STRICT qualifier validation
+- Equipment code detection (P-101, V-205, TK-102)
+- Hierarchy inference (component → parent system)
+- Singleton pattern for reuse
 
 **Dictionary Structure (`entity_dictionary.json`):**
 ```json
@@ -427,27 +500,25 @@ The `EntityExtractor` uses a **dictionary-based approach** for consistent entity
     "fuel_oil": {
       "code": "fo_system",
       "canonical": "Fuel Oil System",
-      "aliases": ["fuel system", "FO system", "fuel oil service"],
+      "aliases": ["fuel system", "FO system"],
       "keywords": ["fuel oil", "diesel oil", "heavy fuel"],
       "abbreviations": ["FO", "HFO", "MDO", "MGO"],
-      "subsystems": ["transfer", "supply", "purification", "storage"]
+      "parent": null
     },
     "cooling_water": {
       "code": "cw_system",
       "canonical": "Cooling Water System",
       "aliases": ["cooling system", "CW system"],
-      "keywords": ["cooling water", "jacket water", "fresh water cooling"],
-      "abbreviations": ["CW", "FW", "SW", "JW"]
+      "keywords": ["cooling water", "jacket water"],
+      "abbreviations": ["CW", "FW", "SW"]
     }
   },
   "component_types": {
     "pump": {
-      "patterns": ["pump", "pumping unit"],
-      "qualifiers": ["main", "auxiliary", "standby", "emergency", "transfer", "supply"]
+      "patterns": ["pump", "pumping unit"]
     },
     "valve": {
-      "patterns": ["valve", "cock", "gate"],
-      "qualifiers": ["safety", "relief", "isolation", "control", "check", "shut-off"]
+      "patterns": ["valve", "cock", "gate"]
     }
   }
 }
@@ -455,31 +526,74 @@ The `EntityExtractor` uses a **dictionary-based approach** for consistent entity
 
 #### Extraction Process
 
-**For each section/schema/table:**
+**1. System Extraction:**
+- Match text against system keywords and aliases (longest match first)
+- Resolve abbreviations (FO → fo_system)
+- Return normalized system codes
 
-1. **System Extraction:**
-   - Match text against system keywords and aliases
-   - Resolve abbreviations (FO → fuel_oil_system)
-   - Return normalized system codes
+**2. Component Extraction with STRICT Qualifier Validation:**
 
-2. **Component Extraction:**
-   - Match component patterns with optional qualifiers
-   - Example: "main fuel oil pump" → `{type: "pump", qualifier: "main", system: "fo_system"}`
-   - Generate component codes: `fo_pump_main`
+```python
+# Valid qualifiers (whitelist)
+valid_qualifiers = {
+    'main', 'auxiliary', 'standby', 'emergency', 'primary', 'secondary',
+    'fuel', 'oil', 'water', 'air', 'steam', 'cooling', 'heating',
+    'inlet', 'outlet', 'suction', 'discharge', 'high', 'low', 'pressure',
+    'safety', 'relief', 'control', 'isolation', 'check',
+    # ... (50+ valid qualifiers)
+}
 
-3. **Equipment Code Detection:**
-   - Regex patterns for equipment codes: `P-101`, `V-205`, `HE-301`
-   - Auto-detect type from prefix (P = pump, V = valve, HE = heat exchanger)
-   - Create entity with `source: "equipment_code"`
+# Stop words (blocklist) - NEVER part of component name
+stop_words = {
+    'the', 'a', 'an', 'of', 'to', 'in', 'on', 'is', 'are', 'this', 'that',
+    'push', 'pull', 'check', 'ensure', 'verify', 'operate', 'damage',
+    # ... (50+ stop words)
+}
+```
 
-4. **Fallback Extraction:**
-   - For unknown systems: generic pattern matching
-   - For unknown components: extract based on component type keywords
-   - Mark with `source: "fallback"` for quality tracking
+**Cleaning Process:**
+```python
+# Input: "ensure proper main fuel pump operation"
+# 1. Split: ['ensure', 'proper', 'main', 'fuel', 'pump']
+# 2. Component: 'pump' (last word)
+# 3. Validate qualifiers: 
+#    - 'ensure' → stop word → reject
+#    - 'proper' → not valid qualifier → reject  
+#    - 'main' → valid qualifier → keep
+#    - 'fuel' → valid qualifier → keep
+# 4. Output: "main fuel pump"
+```
+
+**3. Equipment Code Detection:**
+```python
+# Pattern: Letter(s) + hyphen + numbers
+pattern = r'\b([A-Z]{1,4})[-–](\d{2,4}[A-Z]?)\b'
+
+# Prefix → Type mapping
+code_types = {
+    'P': 'pump',
+    'V': 'valve',
+    'TK': 'tank',
+    'HE': 'heat_exchanger',
+    'FLT': 'filter',
+    'SEP': 'separator',
+    'ME': 'main_engine',
+    'AE': 'auxiliary_engine',
+}
+
+# Example: "P-101" → {type: "pump", code: "eq_p_101"}
+```
+
+**4. Hierarchy Inference:**
+```python
+# Component "fuel oil pump" contains keyword "fuel oil"
+# → Infer parent system: fo_system
+# → Both codes added to entity_ids
+```
 
 **Code Example:**
 ```python
-extractor = EntityExtractor()
+extractor = get_entity_extractor()  # Singleton
 
 result = extractor.extract_from_text(
     "The main fuel oil pump P-101 supplies fuel to the engine..."
@@ -488,12 +602,38 @@ result = extractor.extract_from_text(
 # {
 #     "systems": ["fo_system"],
 #     "components": [
-#         {"code": "fo_pump_main", "type": "pump", "qualifier": "main", "system": "fo_system"},
-#         {"code": "P-101", "type": "pump", "source": "equipment_code"}
+#         {"name": "main fuel oil pump", "type": "pump", "code": "comp_pump_main_fuel_oil_pump"},
+#         {"name": "P-101", "type": "pump", "code": "eq_p_101", "source": "equipment_code"}
 #     ],
-#     "entity_ids": ["fo_system", "fo_pump_main", "P-101"]
+#     "entity_ids": ["fo_system", "comp_pump_main_fuel_oil_pump", "eq_p_101"]
 # }
 ```
+
+#### Query-Time Extraction
+
+Same `EntityExtractor` used for question extraction with **entity search**:
+
+```python
+result = extractor.extract_from_question("What is the FO pump P-101?")
+# Returns:
+# {
+#     "systems": ["fo_system"],  # FO abbreviation resolved
+#     "system_names": ["Fuel Oil System"],
+#     "components": [...],
+#     "component_names": ["P-101"],
+#     "entity_ids": ["fo_system", "eq_p_101"]
+# }
+```
+
+**Entity Search Improvements:**
+- **Neo4j graph traversal:** Find all sections/tables/schemas mentioning entity
+- **Relationship types:**
+  - `(Section)-[:DESCRIBES]->(Entity)` → text mentions
+  - `(Table)-[:MENTIONS]->(Entity)` → table data
+  - `(Schema)-[:DEPICTS]->(Entity)` → diagrams
+- **Cross-reference expansion:** Follow entity relationships to find related content
+- **Hybrid scoring:** Combine graph relationships + vector similarity
+- **Benefit:** More complete entity coverage, better recall for technical queries
 
 #### Graph Node Creation
 
@@ -520,52 +660,19 @@ CREATE (e:Entity {
 
 // Component is part of system
 (Entity:Component)-[:PART_OF]->(Entity:System)
-
-// Entity hierarchy
-(Entity)-[:CHILD_OF]->(Entity)
-```
-
-#### Query-Time Entity Extraction
-
-The same `EntityExtractor` is used at query time to:
-1. Extract entities from user questions
-2. Expand entity IDs (e.g., "FO pump" → ["fo_system", "fo_pump"])
-3. Query graph for related content via relationships
-
-**Query Example:**
-```python
-# User asks: "Tell me about the fuel oil pump"
-
-extraction = extractor.extract_from_question("fuel oil pump")
-# → entity_ids: ["fo_system", "fo_pump"]
-
-# Graph query:
-MATCH (e:Entity)<-[:DESCRIBES]-(s:Section)
-WHERE e.code IN $entity_ids
-RETURN s.content, s.title
 ```
 
 #### Entity Payload in Qdrant
 
-Entities are stored in Qdrant payloads for filtered search:
+Entities stored in Qdrant payloads for filtered search:
 ```python
 {
     "type": "text_chunk",
     "text": "...",
-    "entity_ids": ["fo_system", "fo_pump_main", "P-101"],
+    "entity_ids": ["fo_system", "comp_pump_main_fuel_oil_pump", "eq_p_101"],
     "system_ids": ["fo_system"],
     # ... other metadata
 }
-```
-
-This enables entity-filtered vector search:
-```python
-# Search chunks related to fuel oil system
-filter = Filter(
-    must=[
-        FieldCondition(key="entity_ids", match=MatchAny(any=["fo_system"]))
-    ]
-)
 ```
 
 ---
@@ -634,34 +741,47 @@ if pending_small_section:
 
 ---
 
-### 3. YOLO + Content Reclassification
+### 3. YOLO + LLM Reclassification
 
-**Problem:** YOLO DocLayNet misclassifies complex technical diagrams.
+**Problem:** YOLO DocLayNet misclassifies complex technical diagrams and ambiguous regions.
 
 **Solution:** Two-stage classification:
-1. YOLO provides initial segmentation
-2. Content analysis overrides using:
-   - Caption text patterns
-   - Grid line detection
-   - Drawing coverage percentage
-   - Numeric density
+1. YOLO provides initial segmentation with confidence scores
+2. LLM validation for low-confidence predictions (<0.6):
+   - Analyzes region image + caption + context
+   - GPT-4o-mini provides accurate classification
+   - No brittle rule-based heuristics
 
 **Benefit:** 
-- Leverages YOLO's strong segmentation
-- Fixes type errors with content heuristics
+- Leverages YOLO's strong segmentation capabilities
+- LLM handles ambiguous edge cases accurately
+- More reliable than grid line/drawing coverage heuristics
 - Better table vs schema distinction
 
 ---
 
-### 4. Fallback Processing
+### 4. Multi-Level Fallback Processing
 
-**Problem:** Some tables fail extraction, some schemas contain tables.
+**Problem:** Table extraction often fails on complex layouts; schemas may contain embedded tables.
 
-**Solution:** Bidirectional fallback:
-- **TABLE region:** Extract → Validate → Fallback to schema if invalid
-- **SCHEMA region:** Check for embedded table → Extract both if found
+**Solution:** Multi-level fallback chain:
 
-**Benefit:** No data loss, hybrid extraction when needed.
+**For TABLE regions:**
+1. pdfplumber structured extraction
+2. → LLM vision-based CSV extraction (if step 1 fails)
+3. → Content type re-verification with LLM (if step 2 fails)
+4. → Alternative extraction as TEXT or SCHEMA (if content type changed)
+
+**For SCHEMA regions:**
+1. Extract as image with LLM-generated description
+2. → Check for embedded table within schema bbox
+3. → Dual extraction: both schema image AND table data (if table found)
+
+**Benefit:** 
+- Robust handling of extraction failures
+- No data loss - multiple recovery paths
+- Hybrid extraction captures both visual and structured data
+- LLM provides intelligent fallback when rule-based tools fail
 
 ---
 
@@ -701,10 +821,29 @@ Per document (~100 pages):
 
 ### Graceful Degradation
 
-- **No TOC found:** Create default chapter
+**Document Structure:**
+- **No TOC found:** Create default chapter "Content"
 - **No sections found:** Create fallback section per chapter
-- **Schema extraction fails:** Log warning, continue
-- **Table extraction fails:** Fall back to schema
+- **Empty sections:** Merge with adjacent sections if < 200 chars
+
+**Region Processing:**
+- **YOLO low confidence (<0.6):** Use LLM to verify and reclassify
+- **pdfplumber table extraction fails:** Fall back to LLM CSV extraction
+- **LLM table extraction fails:** Verify content type, extract as TEXT or SCHEMA
+- **Schema with embedded table:** Extract both as separate chunks
+- **Caption not found:** Expand search area, use OCR fallback
+- **All extraction fails:** Log warning, skip region (non-critical)
+
+**Entity Extraction:**
+- **No entities found:** Continue without entity relationships
+- **Ambiguous equipment codes:** Use fallback normalization
+- **System inference fails:** Create standalone component entities
+
+**Embedding & Storage:**
+- **Embedding API failures:** Retry 3× with exponential backoff
+- **Neo4j connection errors:** Retry with fresh session
+- **Qdrant indexing fails:** Log error, continue (non-blocking)
+- **File I/O errors:** Log warning, continue (images/CSVs are optional)
 
 
 ## Configuration
@@ -721,9 +860,8 @@ min_section_length = 200  # chars
 
 # Region Classification
 caption_search_distance = 250  # pixels
-grid_line_threshold = 2
-drawing_coverage_threshold = 0.3
-numeric_density_threshold = 0.15
+yolo_confidence_threshold = 0.8  # Use LLM if below this
+llm_model = "gpt-4o-mini"  # For classification and schema analysis
 
 # Search Thresholds
 text_search_score_threshold = 0.2

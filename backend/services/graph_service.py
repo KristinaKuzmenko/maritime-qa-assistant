@@ -9,10 +9,8 @@ GRAPH SCHEMA:
 - Section → Table (specifications/data)
 - Schema ↔ Table (RELATED_TO: co-located on same page)
 - Section ↔ Section (SIMILAR_TO: semantic similarity, REFERENCES: cross-refs)
+- Entity nodes and relationships 
 
-DISABLED (not used in search):
-- Entity nodes and relationships (can be re-enabled for entity-based search)
-- Term nodes (depends on entities)
 """
 
 from neo4j import AsyncGraphDatabase, AsyncDriver
@@ -398,7 +396,7 @@ class Neo4jClient:
             raise ValueError("doc_id is required for schema creation")
         
         if section_id:
-            # Link through Section (preferred)
+            # Link through Section only (Document connection via Chapter→Section path)
             query = """
             MATCH (s:Section {id: $section_id})
             CREATE (sc:Schema {
@@ -574,20 +572,23 @@ class Neo4jClient:
         schema_ids: List[str],
         include_entities: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Get schema details with document and section context."""
+        """Get schema details with document and section context, including embedded tables."""
         query = """
         UNWIND $schema_ids AS sid
         MATCH (sc:Schema {id: sid})
         OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s:Section)-[:CONTAINS_SCHEMA]->(sc)
         OPTIONAL MATCH (sc)-[:DEPICTS]->(e:Entity)
         WHERE $include_entities = true
+        OPTIONAL MATCH (sc)-[:HAS_LEGEND]->(legend_table:Table)
         RETURN sc {
                    .*,
                    doc_title: d.title,
                    chapter_title: c.title,
-                   section_id: s.id
+                   section_id: s.id,
+                   has_embedded_table: legend_table IS NOT NULL
                } as schema,
-               collect(DISTINCT e {.*}) as depicted_entities
+               collect(DISTINCT e {.*}) as depicted_entities,
+               collect(DISTINCT legend_table {.id, .title, .rows, .cols}) as embedded_tables
         """
         return await self.run_query(query, {
             "schema_ids": schema_ids,
@@ -607,7 +608,7 @@ class Neo4jClient:
             raise ValueError("doc_id is required for table creation")
         
         if section_id:
-            # Link through Section (preferred)
+            # Link through Section only (Document connection via Chapter→Section path)
             query = """
             MATCH (s:Section {id: $section_id})
             CREATE (t:Table {
@@ -729,8 +730,15 @@ class Neo4jClient:
             },
         )
         
+        if not result or len(result) == 0:
+            logger.error(
+                f"❌ Failed to create TableChunk {chunk_id}! "
+                f"Parent table {parent_table_id} not found in Neo4j"
+            )
+            raise ValueError(f"Parent Table {parent_table_id} not found in Neo4j")
+        
         logger.debug(
-            f"Created TableChunk {chunk_id} "
+            f"✅ Created TableChunk {chunk_id} "
             f"(index {chunk_index}/{total_chunks-1}, {len(chunk_text)} chars)"
         )
         
@@ -768,6 +776,19 @@ class Neo4jClient:
         MERGE (t)-[:MENTIONS]->(e)
         """
         await self.run_query(query, {"table_id": table_id, "entity_id": entity_id})
+    
+    async def link_schema_to_table(self, schema_id: str, table_id: str):
+        """
+        Link a Schema to an embedded Table (legend, specs, etc.).
+        Used for hybrid schema+table cases where table is part of the schema.
+        """
+        query = """
+        MATCH (sc:Schema {id: $schema_id})
+        MATCH (t:Table {id: $table_id})
+        MERGE (sc)-[:HAS_LEGEND]->(t)
+        """
+        await self.run_query(query, {"schema_id": schema_id, "table_id": table_id})
+        logger.info(f"Linked Schema {schema_id} to embedded Table {table_id}")
 
     async def get_table_details(
         self,
@@ -1124,41 +1145,20 @@ class Neo4jClient:
             query = """
             MATCH (d:Document {id: $doc_id})
             
-            CALL {
-                WITH d
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->(c:Chapter)
-                RETURN count(DISTINCT c) as chapters
-            }
-            
-            CALL {
-                WITH d
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->(s:Section)
-                RETURN count(DISTINCT s) as sections
-            }
-            
-            CALL {
-                WITH d
-                OPTIONAL MATCH (d)-[:HAS_SCHEMA]->(sc1:Schema)
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_SCHEMA]->(sc2:Schema)
-                WITH collect(DISTINCT sc1) + collect(DISTINCT sc2) as all_schemas
-                UNWIND all_schemas as sc
-                RETURN count(DISTINCT sc) as schemas
-            }
-            
-            CALL {
-                WITH d
-                OPTIONAL MATCH (d)-[:HAS_TABLE]->(tb1:Table)
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_TABLE]->(tb2:Table)
-                WITH collect(DISTINCT tb1) + collect(DISTINCT tb2) as all_tables
-                UNWIND all_tables as tb
-                RETURN count(DISTINCT tb) as tables
-            }
-            
-            CALL {
-                WITH d
-                OPTIONAL MATCH (d)-[:HAS_TABLE]->()<-[:PART_OF]-(tc:TableChunk)
-                RETURN count(DISTINCT tc) as table_chunks
-            }
+            // Optimized: count nodes without loading paths
+            WITH d, 
+                size([(d)-[:HAS_CHAPTER]->(c:Chapter) | c]) as chapters,
+                size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->(s:Section) | s]) as sections,
+                size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:PART_OF]->(chunk:TextChunk) | chunk]) as text_chunks,
+                size([(d)-[:HAS_SCHEMA]->(sc:Schema) | sc]) + 
+                    size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_SCHEMA]->(sc:Schema) | sc]) as schemas,
+                size([(d)-[:HAS_TABLE]->(tb:Table) | tb]) + 
+                    size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_TABLE]->(tb:Table) | tb]) as tables,
+                size([(d)-[:HAS_TABLE]->(tb:Table)<-[:PART_OF]-(tc:TableChunk) | tc]) + 
+                    size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_TABLE]->(tb:Table)<-[:PART_OF]-(tc:TableChunk) | tc]) as table_chunks,
+                size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:DESCRIBES]->(e:Entity) | e]) +
+                    size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_SCHEMA]->()-[:DEPICTS]->(e:Entity) | e]) +
+                    size([(d)-[:HAS_CHAPTER]->()-[:HAS_SECTION]->()-[:CONTAINS_TABLE]->()-[:MENTIONS]->(e:Entity) | e]) as entities
             
             RETURN 
                 d.id as doc_id,
@@ -1166,10 +1166,11 @@ class Neo4jClient:
                 d.total_pages as total_pages,
                 chapters,
                 sections,
+                text_chunks,
                 schemas,
                 tables,
                 table_chunks,
-                0 as entities
+                entities
             """
             result = await self.run_query(query, {"doc_id": doc_id})
         else:
@@ -1274,7 +1275,7 @@ class Neo4jClient:
         
         stats = result[0]
         logger.info(
-            f"Deleted via relationships: "
+            f"Deleted via batched operations: "
             f"doc=1, chapters={stats['chapters_deleted']}, "
             f"sections={stats['sections_deleted']}, "
             f"schemas={stats['schemas_deleted']}, "
@@ -1282,34 +1283,59 @@ class Neo4jClient:
             f"table_chunks={stats['table_chunks_deleted']}"
         )
         
-        # Step 2: Delete orphaned nodes by doc_id property
-        query_orphans = """
-        OPTIONAL MATCH (sc:Schema {doc_id: $doc_id})
+        # Step 2: Delete orphaned nodes by doc_id property (batched)
+        query_orphan_schemas = """
+        MATCH (sc:Schema {doc_id: $doc_id})
         WHERE NOT (sc)<-[:CONTAINS_SCHEMA]-() AND NOT (sc)<-[:HAS_SCHEMA]-()
-        
-        OPTIONAL MATCH (tb:Table {doc_id: $doc_id})
-        WHERE NOT (tb)<-[:CONTAINS_TABLE]-() AND NOT (tb)<-[:HAS_TABLE]-()
-        
-        OPTIONAL MATCH (tc:TableChunk {doc_id: $doc_id})
-        WHERE NOT (tc)-[:PART_OF]->()
-        
-        WITH collect(DISTINCT sc) as orphan_schemas,
-            collect(DISTINCT tb) as orphan_tables,
-            collect(DISTINCT tc) as orphan_chunks
-        
-        FOREACH (sc IN orphan_schemas | DETACH DELETE sc)
-        FOREACH (tb IN orphan_tables | DETACH DELETE tb)
-        FOREACH (tc IN orphan_chunks | DETACH DELETE tc)
-        
-        RETURN size(orphan_schemas) as schemas_orphan,
-            size(orphan_tables) as tables_orphan,
-            size(orphan_chunks) as chunks_orphan
+        WITH sc LIMIT 100
+        DETACH DELETE sc
+        RETURN count(sc) as deleted
         """
+        schemas_orphan = 0
+        while True:
+            result = await self.run_query(query_orphan_schemas, {"doc_id": doc_id})
+            deleted = result[0]["deleted"] if result else 0
+            schemas_orphan += deleted
+            if deleted == 0:
+                break
         
-        orphan_result = await self.run_query(query_orphans, {"doc_id": doc_id})
-        orphan_stats = orphan_result[0] if orphan_result else {}
+        query_orphan_tables = """
+        MATCH (tb:Table {doc_id: $doc_id})
+        WHERE NOT (tb)<-[:CONTAINS_TABLE]-() AND NOT (tb)<-[:HAS_TABLE]-()
+        WITH tb LIMIT 100
+        DETACH DELETE tb
+        RETURN count(tb) as deleted
+        """
+        tables_orphan = 0
+        while True:
+            result = await self.run_query(query_orphan_tables, {"doc_id": doc_id})
+            deleted = result[0]["deleted"] if result else 0
+            tables_orphan += deleted
+            if deleted == 0:
+                break
         
-        if orphan_stats.get("schemas_orphan", 0) > 0 or orphan_stats.get("tables_orphan", 0) > 0:
+        query_orphan_chunks = """
+        MATCH (tc:TableChunk {doc_id: $doc_id})
+        WHERE NOT (tc)-[:PART_OF]->()
+        WITH tc LIMIT 100
+        DETACH DELETE tc
+        RETURN count(tc) as deleted
+        """
+        chunks_orphan = 0
+        while True:
+            result = await self.run_query(query_orphan_chunks, {"doc_id": doc_id})
+            deleted = result[0]["deleted"] if result else 0
+            chunks_orphan += deleted
+            if deleted == 0:
+                break
+        
+        orphan_stats = {
+            "schemas_orphan": schemas_orphan,
+            "tables_orphan": tables_orphan,
+            "chunks_orphan": chunks_orphan
+        }
+        
+        if schemas_orphan > 0 or tables_orphan > 0:
             logger.warning(
                 f"⚠️ Deleted ORPHANED nodes: "
                 f"schemas={orphan_stats.get('schemas_orphan', 0)}, "
@@ -1317,15 +1343,22 @@ class Neo4jClient:
                 f"chunks={orphan_stats.get('chunks_orphan', 0)}"
             )
 
-        # Step 3: Clean up ALL orphaned Entities (not just from this doc)
+        # Step 3: Clean up ALL orphaned Entities (batched to avoid memory issues)
         query_orphaned_entities = """
         MATCH (e:Entity)
         WHERE NOT (e)<-[:DESCRIBES|DEPICTS|MENTIONS]-()
+        WITH e LIMIT 200
         DETACH DELETE e
-        RETURN count(e) as deleted_entities
+        RETURN count(e) as deleted
         """
-        entity_result = await self.run_query(query_orphaned_entities)
-        deleted_entities = entity_result[0]["deleted_entities"] if entity_result else 0
+        deleted_entities = 0
+        while True:
+            result = await self.run_query(query_orphaned_entities)
+            deleted = result[0]["deleted"] if result else 0
+            deleted_entities += deleted
+            if deleted == 0:
+                break
+        
         if deleted_entities > 0:
             logger.info(f"🧹 Deleted {deleted_entities} orphaned entities")
         

@@ -37,8 +37,9 @@ class SchemaExtractor:
         storage_service,
         layout_analyzer: LayoutAnalyzer,
         llm_service: Optional[AsyncOpenAI] = None,
-        zoom: float = 3.0,  # High resolution for technical diagrams
+        zoom: float = 2.0,  # Resolution for technical diagrams
         thumbnail_size: Tuple[int, int] = (600, 600),
+        vision_detail: str = "auto",  # From config: auto/low/high
         caption_search_distance: int = 250,  # pixels above/below schema (increased)
         surrounding_text_radius: int = 300,  # pixels for surrounding text
         max_nearby_paragraphs: int = 3,  # max paragraphs to extract
@@ -62,19 +63,26 @@ class SchemaExtractor:
         self.llm_service = llm_service
         self.zoom = zoom
         self.thumbnail_size = thumbnail_size
-        self.caption_search_distance = caption_search_distance
+        self.caption_search_distance = max(caption_search_distance, 200)  # Ensure minimum 200px for better caption detection
         self.surrounding_text_radius = surrounding_text_radius
         self.max_nearby_paragraphs = max_nearby_paragraphs
-        self.enable_llm_summary = enable_llm_summary and llm_service is not None
+        self.enable_llm_summary = enable_llm_summary
+        self.vision_detail = vision_detail  # For LLM schema descriptions and llm_service is not None
         
         # Initialize settings for LLM
         if self.enable_llm_summary:
             self.settings = Settings()
         
         # Caption patterns - expanded for multilingual support
+        # Pattern 1: With figure numbers (e.g., "Figure 3.2: Caption")
+        # Pattern 2: Without numbers (e.g., "Type : MAXI ALL MODE", "PRIMARY BLOWER")
         self.caption_patterns = [
             re.compile(r'(?i)(?:figure|fig\.?|diagram|schema|drawing|dwg\.?)\s+([0-9]+(?:[.-][0-9]+)*)\s*[:-]?\s*(.+?)(?:\n|$)', re.MULTILINE),
             re.compile(r'(?i)(?:рис(?:унок)?\.?|схема|чертеж)\s+([0-9]+(?:[.-][0-9]+)*)\s*[:-]?\s*(.+?)(?:\n|$)', re.MULTILINE),  # Russian
+            # Patterns WITHOUT mandatory numbers:
+            re.compile(r'(?i)(?:figure|fig\.?|diagram|schema|drawing|type|model)\s*[:-]\s*(.+?)(?:\n|$)', re.MULTILINE),
+            re.compile(r'^([A-Z][A-Z0-9\s:&\-]{10,80})$', re.MULTILINE),  # ALL CAPS titles like "PRIMARY BLOWER & 1ST D.O BURNER"
+            re.compile(r'^(<<\s*FIG\.\s*[A-Z0-9\-]+\s*>>)$', re.MULTILINE),  # << FIG. S-03 >>
         ]
         
         # Reference patterns for finding mentions of schema in text
@@ -171,7 +179,7 @@ class SchemaExtractor:
         Use this when region is already detected to avoid duplicate analyze_page calls.
         
         :param page: PyMuPDF page object
-        :param region: Pre-detected schema region
+        :param region: Pre-detected schema region (may contain caption_text from RegionClassifier)
         :param doc_id: Document ID
         :param page_num: Page number (zero-based)
         :param idx: Schema index on page
@@ -182,6 +190,12 @@ class SchemaExtractor:
         """
         safe_doc_id = doc_id_sanitized or self._sanitize(doc_id)
         
+        # Debug: Check if region has caption_text
+        if region.caption_text:
+            logger.debug(f"📝 SchemaExtractor received region with caption: {region.caption_text[:50]}")
+        else:
+            logger.debug(f"📝 SchemaExtractor received region WITHOUT caption (will search)")
+        
         return await self._extract_schema_region(
             page=page,
             region=region,
@@ -191,6 +205,7 @@ class SchemaExtractor:
             idx=idx,
             text_context=text_context,
             section_id=section_id,
+            provided_caption=region.caption_text,  # Pass caption from RegionClassifier
         )
     
     async def _extract_schema_region(
@@ -203,6 +218,7 @@ class SchemaExtractor:
         idx: int,
         text_context: Optional[str],
         section_id: Optional[str],
+        provided_caption: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Extract single schema region with enhanced context.
@@ -215,6 +231,7 @@ class SchemaExtractor:
         :param idx: Schema index on page
         :param text_context: Text context from page/section
         :param section_id: Associated section ID
+        :param provided_caption: Caption text already found by RegionClassifier (optional)
         :return: Schema metadata dict with enhanced context
         """
         bbox = region.bbox
@@ -226,7 +243,7 @@ class SchemaExtractor:
         area_ratio = bbox_area / page_area
 
         # Minimum thresholds
-        min_area_ratio = 0.003  # 0.3% of page area
+        min_area_ratio = 0.005  # 0.5% of page area
         min_width = 80          # pixels in page coordinates
         min_height = 80         # pixels in page coordinates
 
@@ -260,6 +277,25 @@ class SchemaExtractor:
             logger.error(f"Failed to render schema crop: {e}")
             return None
         
+        # Extract enhanced context (pass provided caption if available)
+        context = self._extract_enhanced_context(
+            page, bbox, page_num, text_context or "", provided_caption=provided_caption
+        )
+        
+        # Add page metadata for fallback context
+        context['page_number'] = page_num + 1
+        context['doc_title'] = doc_id  # Will be replaced with actual title if available
+        
+        # Generate LLM summary BEFORE saving - required for meaningful search
+        llm_summary = None
+        if self.enable_llm_summary:
+            llm_summary = await self._generate_llm_summary(crop_png, context)
+            if not llm_summary:
+                logger.info("⚠️ Skipping schema - no LLM description generated (required for context)")
+                return None
+            context['llm_summary'] = llm_summary
+        else:
+            logger.warning("⚠️ LLM summary disabled - schemas will have no search context")
         # Create thumbnail
         thumb_png = self._make_thumbnail(crop_png, self.thumbnail_size)
         
@@ -279,20 +315,6 @@ class SchemaExtractor:
             thumb_rel,
             content_type="image/png",
         )
-        
-        # Extract enhanced context
-        context = self._extract_enhanced_context(page, bbox, page_num, text_context or "")
-        
-        # Add page metadata for fallback context
-        context['page_number'] = page_num + 1
-        context['doc_title'] = doc_id  # Will be replaced with actual title if available
-        
-        # Generate LLM summary if enabled
-        llm_summary = None
-        if self.enable_llm_summary:
-            llm_summary = await self._generate_llm_summary(crop_png, context)
-            if llm_summary:
-                context['llm_summary'] = llm_summary
         
         # Build schema metadata with enhanced context
         schema_data = {
@@ -414,27 +436,38 @@ class SchemaExtractor:
                     continue
                 
                 # Try to match caption patterns
-                for pattern in self.caption_patterns:
+                for i, pattern in enumerate(self.caption_patterns):
                     match = pattern.search(text)
                     if match:
-                        # Extract figure number and caption text
-                        fig_number = match.group(1)
-                        caption_text = match.group(2).strip()
+                        # Patterns 0-1: Have figure numbers (2 groups)
+                        # Patterns 2-4: No numbers (1 group)
+                        if i < 2:  # With figure number
+                            fig_number = match.group(1)
+                            caption_text = match.group(2).strip()
+                            caption = f"Figure {fig_number}: {caption_text}"
+                        else:  # Without figure number
+                            caption_text = match.group(1).strip()
+                            caption = caption_text
                         
                         # Clean up caption
-                        caption = f"Figure {fig_number}: {caption_text}"
                         caption = self._clean_text(caption)
                         
-                        logger.debug(f"Found caption: {caption}")
-                        return caption
+                        # Validate: skip if too short or looks like noise
+                        if len(caption) >= 5:
+                            logger.info(f"✅ Found caption (pattern {i}): {caption}")
+                            return caption
             
-            # If no pattern match, return first line of text as fallback
+            # Improved fallback: look for any bold/title-like text
             for search_rect in search_regions:
                 text = page.get_text("text", clip=search_rect).strip()
                 if text:
-                    first_line = text.split('\n')[0].strip()
-                    if first_line and len(first_line) > 10:  # Reasonable caption length
-                        return self._clean_text(first_line)
+                    lines = [line.strip() for line in text.split('\n') if line.strip()]
+                    for line in lines[:3]:  # Check first 3 lines
+                        # Accept if: all caps, contains colon, or reasonable length title
+                        if (8 <= len(line) <= 100 and 
+                            (line.isupper() or ':' in line)):
+                            logger.info(f"✅ Found fallback caption: {line}")
+                            return self._clean_text(line)
             
         except Exception as e:
             logger.debug(f"Caption extraction failed: {e}")
@@ -447,6 +480,7 @@ class SchemaExtractor:
         bbox: BBox,
         page_num: int,
         full_page_text: str,
+        provided_caption: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Extract rich context for schema with nearby paragraphs and references.
@@ -455,6 +489,7 @@ class SchemaExtractor:
         :param bbox: Schema bounding box
         :param page_num: Page number (zero-based)
         :param full_page_text: Full page text for reference finding
+        :param provided_caption: Caption already found by RegionClassifier (optional)
         :return: Context dict with caption, paragraphs, references, surrounding text
         """
         context = {
@@ -464,8 +499,17 @@ class SchemaExtractor:
             'surrounding_text': '',
         }
         
-        # 1. Caption extraction (existing method)
-        context['caption'] = self._extract_caption_near_bbox(page, bbox)
+        # 1. Caption extraction - use provided caption if available, otherwise search
+        if provided_caption:
+            context['caption'] = provided_caption
+            logger.info(f"✅ Using provided caption from RegionClassifier: {provided_caption[:50]}")
+        else:
+            logger.debug("⚠️ No provided caption - searching near bbox with SchemaExtractor patterns")
+            context['caption'] = self._extract_caption_near_bbox(page, bbox)
+            if context['caption']:
+                logger.info(f"✅ Found caption via SchemaExtractor search: {context['caption'][:50]}")
+            else:
+                logger.debug("❌ No caption found via SchemaExtractor search")
         
         # 2. Neighboring paragraphs
         context['nearby_paragraphs'] = self._extract_neighboring_paragraphs(page, bbox)
@@ -482,6 +526,30 @@ class SchemaExtractor:
         # 4. Surrounding text (fallback if no paragraphs)
         if not context['nearby_paragraphs']:
             context['surrounding_text'] = self._extract_surrounding_text(page, bbox)
+        
+        # 5. Domain tags extraction (for semantic awareness)
+        domain_tags = []
+        context_text = (context['surrounding_text'] + ' ' + ' '.join(context['nearby_paragraphs'])).lower()
+        
+        if any(kw in context_text for kw in ['burner', 'combustion', 'fuel', 'ignition']):
+            domain_tags.append('combustion')
+        if any(kw in context_text for kw in ['control', 'automation', 'sensor', 'controller']):
+            domain_tags.append('automation')
+        if any(kw in context_text for kw in ['display', 'panel', 'screen', 'hmi', 'interface']):
+            domain_tags.append('HMI')
+        if any(kw in context_text for kw in ['pump', 'valve', 'pipe', 'flow']):
+            domain_tags.append('fluid_system')
+        if any(kw in context_text for kw in ['electrical', 'wiring', 'circuit', 'power']):
+            domain_tags.append('electrical')
+        
+        context['domain_tags'] = domain_tags
+        
+        # 6. Entity codes extraction (equipment identifiers)
+        import re
+        # Match patterns like PU3, P-101, V-205, CP-1, 7M2, etc.
+        surrounding_text = context.get('surrounding_text', '') + ' ' + context.get('caption', '')
+        codes = re.findall(r'\b[A-Z]{1,3}\-?\d{1,3}\b', surrounding_text)
+        context['entity_codes'] = list(set(codes))[:10]  # Limit to 10 unique codes
         
         return context
     
@@ -681,55 +749,99 @@ class SchemaExtractor:
         if not self.enable_llm_summary:
             return None
         
-        try:
-            # Encode image to base64
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-            
-            # Build prompt with available context
-            prompt_parts = [
-                "Analyze this technical schematic diagram and provide a concise description (2-3 sentences) of:",
-                "1. What type of system/component it shows",
-                "2. Key elements visible in the diagram",
-                "3. The diagram's purpose or function",
+        import asyncio
+        from openai import RateLimitError
+        
+        # Retry configuration for rate limits
+        max_retries = 3
+        retry_delay = 1.0  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            try:
+                # Encode image to base64
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                # Build comprehensive prompt with available context
+                prompt_parts = [
+                "Analyze this technical diagram/schematic and provide a detailed description.",
+                "",
+                "Include in your description:",
+                "1. SYSTEM/COMPONENT TYPE: What equipment/system is shown (e.g., 'fuel oil separator', 'cooling water system', 'ballast pump arrangement')",
+                "2. KEY COMPONENTS: List all major equipment, valves, pumps, tanks, pipes visible",
+                "3. EQUIPMENT CODES: Any alphanumeric codes visible (e.g., 7M2, P-101, V-205)",
+                "4. PURPOSE/FUNCTION: What this system does and its role in ship operations",
+                "5. TECHNICAL DETAILS: Flow directions, connections, measurements if visible",
+                "6. KEYWORDS: Important search terms (system name, equipment type, function)",
+                "7. CLASSIFY diagram type using ONLY one of:",
+                "   - PROCESS_FLOW (fluid/gas flow through system)",
+                "   - CONTROL_LOGIC (automation, sensors, control sequences)",
+                "   - HMI_SCREEN (operator interface, display panel)",
+                "   - WIRING (electrical connections, circuits)",
+                "   - PIPING (pipe layout, P&ID)",
+                "   - MECHANICAL_LAYOUT (physical arrangement, assembly)",
+                "   - OTHER (if none above fit)",
+                "",
+                "RESPONSE FORMAT:",
+                "- If NOT a diagram: First line 'NOT_SCHEMA'",
+                "- If VALID diagram: First line 'TYPE:<value>', then 4-6 sentences with rich technical vocabulary",
+                "",
+                "Use FULL equipment names that users would search for.",
             ]
             
-            # Add existing context if available
-            if context.get('caption'):
-                prompt_parts.append(f"\nCaption: {context['caption']}")
-            if context.get('nearby_paragraphs'):
-                prompt_parts.append(f"\nContext: {context['nearby_paragraphs'][0][:200]}...")
-            
-            prompt = "\n".join(prompt_parts)
-            
-            # Call GPT-4 Vision API
-            response = await self.llm_service.chat.completions.create(
-                model="gpt-4o-mini",  # Vision-capable model
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{image_base64}",
-                                    "detail": "low"  # Faster, cheaper
+                # Add existing context if available
+                if context.get('caption'):
+                    prompt_parts.append(f"\n📋 CAPTION: {context['caption']}")
+                if context.get('nearby_paragraphs'):
+                    prompt_parts.append(f"\n📄 CONTEXT: {context['nearby_paragraphs'][0][:300]}...")
+                
+                prompt = "\n".join(prompt_parts)
+                
+                # Call GPT-4 Vision API with higher token limit
+                response = await self.llm_service.chat.completions.create(
+                    model="gpt-4o-mini",  # Vision-capable model
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{image_base64}",
+                                        "detail": self.vision_detail  # Configurable: auto adapts to image size
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=200,
-                temperature=0.3,
-            )
-            
-            summary = response.choices[0].message.content.strip()
-            logger.info(f"Generated LLM summary for schema ({len(summary)} chars)")
-            return summary
-            
-        except Exception as e:
-            logger.warning(f"Failed to generate LLM summary: {e}")
-            return None
+                            ]
+                        }
+                    ],
+                    max_tokens=400,  # Increased for detailed description
+                    temperature=0.1,  # Lower for more factual descriptions
+                )
+                
+                summary = response.choices[0].message.content.strip()
+                
+                # Accept any non-empty response (even short equipment names)
+                if summary and len(summary) >= 5:
+                    logger.info(f"Generated LLM summary for schema ({len(summary)} chars)")
+                    return summary
+                else:
+                    logger.warning("LLM returned empty response for schema")
+                    return None
+                
+            except RateLimitError as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"⏳ Rate limit hit, retrying in {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Rate limit exceeded after {max_retries} retries: {e}")
+                    return None
+            except Exception as e:
+                logger.warning(f"Failed to generate LLM summary: {e}")
+                return None
+        
+        return None  # All retries failed
     
     def _build_rich_context(self, context: Dict[str, Any]) -> str:
         """
@@ -743,6 +855,12 @@ class SchemaExtractor:
         # 0. LLM Summary (highest priority if available)
         if context.get('llm_summary'):
             text_parts.append(f"Description: {context['llm_summary']}")
+            
+            # Extract diagram TYPE tag for semantic indexing
+            import re
+            match = re.search(r"TYPE:(\w+)", context['llm_summary'])
+            if match:
+                text_parts.append(f"DiagramType: {match.group(1)}")
         
         # 1. Caption
         if context['caption']:
@@ -761,6 +879,14 @@ class SchemaExtractor:
         # 4. Surrounding text (fallback)
         if not context['nearby_paragraphs'] and context['surrounding_text']:
             text_parts.append(f"Surrounding text: {context['surrounding_text'][:500]}")
+        
+        # 5. Domain tags (semantic context)
+        if context.get('domain_tags'):
+            text_parts.append(f"Tags: {' '.join(context['domain_tags'])}")
+        
+        # 6. Entity codes (equipment identifiers)
+        if context.get('entity_codes'):
+            text_parts.append(f"EntityCodes: {', '.join(context['entity_codes'])}")
         
         # Combine all parts
         combined = "\n\n".join(text_parts)
