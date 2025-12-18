@@ -147,8 +147,9 @@ class TableExtractor:
                 # Build Table node payload
                 table_id = self._stable_table_id(doc_id, page_num, t.bbox, idx)
 
-                # Use first chunk for preview, store all chunks
+                # Use first chunk for preview, combine all chunks for normalized_text
                 first_chunk = text_chunks[0] if text_chunks else ""
+                full_text = "\n\n".join(text_chunks) if text_chunks else ""
 
                 tables.append({
                     "id": table_id,
@@ -164,7 +165,7 @@ class TableExtractor:
                     "bbox": {"x0": t.bbox[0], "y0": t.bbox[1], "x1": t.bbox[2], "y1": t.bbox[3]},
                     "text_preview": self._safe_truncate(first_chunk, 500),
                     "text_chunks": text_chunks,  # List of embedding-safe chunks
-                    "normalized_text": first_chunk,  # Keep for backward compatibility
+                    "normalized_text": full_text,  # Full table (all chunks combined)
                 })
                 idx += 1
 

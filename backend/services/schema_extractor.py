@@ -286,16 +286,26 @@ class SchemaExtractor:
         context['page_number'] = page_num + 1
         context['doc_title'] = doc_id  # Will be replaced with actual title if available
         
-        # Generate LLM summary BEFORE saving - required for meaningful search
+        # Generate LLM summary - if available, use it; otherwise use fallback context
         llm_summary = None
         if self.enable_llm_summary:
             llm_summary = await self._generate_llm_summary(crop_png, context)
-            if not llm_summary:
-                logger.info("⚠️ Skipping schema - no LLM description generated (required for context)")
-                return None
-            context['llm_summary'] = llm_summary
+            if llm_summary:
+                context['llm_summary'] = llm_summary
+                logger.info(f"✅ LLM generated description for schema")
+            else:
+                # LLM couldn't describe (classified as NOT_SCHEMA) - use fallback
+                fallback_desc = self._build_fallback_description(context)
+                context['llm_summary'] = fallback_desc
+                logger.warning(
+                    f"⚠️ LLM returned NOT_SCHEMA, using fallback description: "
+                    f"caption='{context.get('caption', 'N/A')}'"
+                )
         else:
-            logger.warning("⚠️ LLM summary disabled - schemas will have no search context")
+            # LLM disabled - use fallback description
+            fallback_desc = self._build_fallback_description(context)
+            context['llm_summary'] = fallback_desc
+            logger.warning("⚠️ LLM summary disabled - using fallback description")
         # Create thumbnail
         thumb_png = self._make_thumbnail(crop_png, self.thumbnail_size)
         
@@ -738,6 +748,23 @@ class SchemaExtractor:
         
         return False
     
+    def _build_fallback_description(self, context: Dict[str, Any]) -> str:
+        """
+        Build fallback description when LLM cannot analyze image.
+        Since text_context already contains caption and surrounding text,
+        this just provides a minimal valid description.
+        
+        :param context: Context dict with caption, nearby_paragraphs, etc.
+        :return: Fallback description string
+        """
+        # Use caption if available as the base
+        caption = context.get('caption', '').strip()
+        if caption and len(caption) > 10:
+            return f"Technical diagram: {caption}"
+        
+        # Otherwise generic description (text_context will have the details)
+        return "Technical diagram from maritime manual"
+    
     async def _generate_llm_summary(self, image_bytes: bytes, context: Dict[str, Any]) -> Optional[str]:
         """
         Generate LLM-based description of schema using vision model.
@@ -763,29 +790,36 @@ class SchemaExtractor:
                 
                 # Build comprehensive prompt with available context
                 prompt_parts = [
-                "Analyze this technical diagram/schematic and provide a detailed description.",
+                "Analyze this image from a technical maritime manual.",
                 "",
-                "Include in your description:",
-                "1. SYSTEM/COMPONENT TYPE: What equipment/system is shown (e.g., 'fuel oil separator', 'cooling water system', 'ballast pump arrangement')",
-                "2. KEY COMPONENTS: List all major equipment, valves, pumps, tanks, pipes visible",
-                "3. EQUIPMENT CODES: Any alphanumeric codes visible (e.g., 7M2, P-101, V-205)",
-                "4. PURPOSE/FUNCTION: What this system does and its role in ship operations",
-                "5. TECHNICAL DETAILS: Flow directions, connections, measurements if visible",
-                "6. KEYWORDS: Important search terms (system name, equipment type, function)",
-                "7. CLASSIFY diagram type using ONLY one of:",
-                "   - PROCESS_FLOW (fluid/gas flow through system)",
-                "   - CONTROL_LOGIC (automation, sensors, control sequences)",
-                "   - HMI_SCREEN (operator interface, display panel)",
-                "   - WIRING (electrical connections, circuits)",
-                "   - PIPING (pipe layout, P&ID)",
-                "   - MECHANICAL_LAYOUT (physical arrangement, assembly)",
-                "   - OTHER (if none above fit)",
+                "WHAT IS A VALID DIAGRAM/SCHEMA:",
+                "- System diagrams (piping, electrical, hydraulic, pneumatic)",
+                "- Equipment layouts and arrangements",
+                "- Control panels, HMI screens, dashboards",
+                "- Flow diagrams (process flow, control logic)",
+                "- Wiring and circuit diagrams",
+                "- Mechanical assemblies and component views",
+                "- ANY technical drawing with equipment, symbols, or system components",
+                "",
+                "ONLY answer 'NOT_SCHEMA' if the image is:",
+                "- Plain text (no drawings)",
+                "- Photos of physical equipment (not drawings)",
+                "- Tables or charts without technical symbols",
+                "- Page headers/footers/decorative elements",
+                "",
+                "IF THIS IS A VALID DIAGRAM (even if simple or partial), provide:",
+                "1. SYSTEM/COMPONENT TYPE: Equipment/system shown (e.g., 'fuel oil separator', 'cooling water system')",
+                "2. KEY COMPONENTS: Major equipment, valves, pumps, tanks, pipes visible",
+                "3. EQUIPMENT CODES: Any alphanumeric codes (e.g., 7M2, P-101, V-205)",
+                "4. PURPOSE/FUNCTION: What this system does",
+                "5. TECHNICAL DETAILS: Flow directions, connections, measurements",
+                "6. DIAGRAM TYPE: Classify as PROCESS_FLOW, CONTROL_LOGIC, HMI_SCREEN, WIRING, PIPING, MECHANICAL_LAYOUT, or OTHER",
                 "",
                 "RESPONSE FORMAT:",
-                "- If NOT a diagram: First line 'NOT_SCHEMA'",
-                "- If VALID diagram: First line 'TYPE:<value>', then 4-6 sentences with rich technical vocabulary",
+                "- First line: 'NOT_SCHEMA' (only if truly not a diagram) OR 'TYPE:<diagram_type>'",
+                "- Following lines: 4-6 sentences with rich technical vocabulary",
                 "",
-                "Use FULL equipment names that users would search for.",
+                "Be LIBERAL in accepting diagrams - if there are ANY technical symbols, lines, or equipment shown, it's a valid diagram.",
             ]
             
                 # Add existing context if available
@@ -808,7 +842,7 @@ class SchemaExtractor:
                                     "type": "image_url",
                                     "image_url": {
                                         "url": f"data:image/png;base64,{image_base64}",
-                                        "detail": self.vision_detail  # Configurable: auto adapts to image size
+                                        "detail": "high"  # Always use high detail for technical diagrams
                                     }
                                 }
                             ]
@@ -820,9 +854,22 @@ class SchemaExtractor:
                 
                 summary = response.choices[0].message.content.strip()
                 
+                # Log the raw LLM response for debugging
+                logger.debug(f"LLM raw response: {summary[:200]}...")
+                
+                # Check if LLM classified as NOT a schema
+                if summary.upper().startswith("NOT_SCHEMA"):
+                    logger.warning(
+                        f"⚠️ LLM classified image as NOT_SCHEMA. "
+                        f"Context: caption='{context.get('caption', 'N/A')}', "
+                        f"nearby_text={len(context.get('nearby_paragraphs', []))} paragraphs. "
+                        f"Full response: {summary[:500]}"
+                    )
+                    return None
+                
                 # Accept any non-empty response (even short equipment names)
                 if summary and len(summary) >= 5:
-                    logger.info(f"Generated LLM summary for schema ({len(summary)} chars)")
+                    logger.info(f"✅ Generated LLM summary for schema ({len(summary)} chars): {summary[:100]}...")
                     return summary
                 else:
                     logger.warning("LLM returned empty response for schema")

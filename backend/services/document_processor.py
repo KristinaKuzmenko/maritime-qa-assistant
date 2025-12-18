@@ -1288,14 +1288,30 @@ The visual elements are processed separately and linked to this section for orga
                 f"section_id={section_id}"
             )
             
-            # Process each table chunk
-            for idx, table_chunk in enumerate(table_chunks):
+            # Group chunks by table_id to handle multi-chunk tables
+            chunks_by_table = {}
+            for table_chunk in table_chunks:
+                table_id = table_chunk["metadata"]["table_id"]
+                if table_id not in chunks_by_table:
+                    chunks_by_table[table_id] = []
+                chunks_by_table[table_id].append(table_chunk)
+            
+            # Sort chunks within each table by chunk_index
+            for table_id in chunks_by_table:
+                chunks_by_table[table_id].sort(key=lambda c: c["metadata"].get("chunk_index", 0))
+            
+            logger.debug(
+                f"Page {page_num + 1}: grouped into {len(chunks_by_table)} table(s)"
+            )
+            
+            # Process each table (all its chunks together)
+            for table_id, chunks in chunks_by_table.items():
                 try:
                     logger.debug(
-                        f"Processing table chunk {idx+1}/{len(table_chunks)} on page {page_num + 1}"
+                        f"Processing table {table_id} with {len(chunks)} chunk(s) on page {page_num + 1}"
                     )
-                    await self._process_table_chunk_from_smart_processor(
-                        table_chunk=table_chunk,
+                    await self._process_table_with_chunks(
+                        table_chunks=chunks,
                         section_id=section_id,
                         doc_id=doc_id,
                         owner=owner,
@@ -1303,7 +1319,7 @@ The visual elements are processed separately and linked to this section for orga
                     tables_processed += 1
                 except Exception as e:
                     logger.error(
-                        f"❌ Failed to process table chunk {idx+1}/{len(table_chunks)} on page {page_num + 1}: {e}",
+                        f"❌ Failed to process table {table_id} with {len(chunks)} chunk(s) on page {page_num + 1}: {e}",
                         exc_info=True
                     )
 
@@ -1430,6 +1446,160 @@ The visual elements are processed separately and linked to this section for orga
     # -------------------------------------------------------------------------
     # Table processing
     # -------------------------------------------------------------------------
+
+    async def _process_table_with_chunks(
+        self,
+        table_chunks: List[Dict[str, Any]],
+        section_id: Optional[str],
+        doc_id: str,
+        owner: str,
+    ) -> None:
+        """
+        Process all chunks of a single table together.
+        
+        This method handles multi-chunk tables correctly by:
+        1. Combining all chunk contents into normalized_text
+        2. Creating the parent Table node with full text
+        3. Creating individual TableChunk nodes
+        4. Indexing each chunk in Qdrant
+        
+        :param table_chunks: List of all chunks for this table (sorted by chunk_index)
+        :param section_id: Section ID to link table to
+        :param doc_id: Document ID
+        :param owner: Owner identifier
+        """
+        if not table_chunks:
+            logger.warning("_process_table_with_chunks called with empty table_chunks list")
+            return
+        
+        # Get metadata from first chunk (same for all chunks)
+        first_chunk = table_chunks[0]
+        metadata = first_chunk["metadata"]
+        table_id = metadata["table_id"]
+        
+        # Combine all chunk contents into full normalized_text
+        combined_text = "\n\n".join(chunk["content"] for chunk in table_chunks)
+        
+        logger.debug(
+            f"Processing table {table_id}: {len(table_chunks)} chunk(s), "
+            f"combined_length={len(combined_text)}, "
+            f"section_id={section_id}"
+        )
+        
+        # Generate tags based on combined table content + LLM tags
+        tags = self._generate_tags(
+            content_type="table",
+            text_context=combined_text,  # Use full text for tag generation
+            llm_tags=metadata.get("llm_tags", [])
+        )
+        
+        # Build table data for parent Table node
+        table_data = {
+            "id": table_id,
+            "doc_id": doc_id,
+            "page_number": first_chunk["page_number"],
+            "title": metadata["title"],
+            "caption": metadata["caption"],
+            "rows": metadata["rows"],
+            "cols": metadata["cols"],
+            "file_path": metadata["file_path"],
+            "thumbnail_path": metadata["thumbnail_path"],
+            "csv_path": metadata["csv_path"],
+            "bbox": metadata["bbox"],
+            "text_preview": combined_text[:500],  # Preview from start of full text
+            "normalized_text": combined_text,     # FULL text from ALL chunks
+            "tags": tags,
+        }
+        
+        llm_tags = metadata.get("llm_tags", [])
+        tags_info = f"tags: {', '.join(tags)}" if tags else "no tags"
+        if llm_tags:
+            tags_info += f" (LLM suggested: {', '.join(llm_tags)})"
+        
+        logger.debug(f"Creating Table node: {table_id} with {tags_info}")
+        
+        # Create parent Table node in Neo4j
+        await self.graph.create_table(table_data, section_id=section_id)
+        
+        logger.info(
+            f"Created Table node: {table_id} "
+            f"(page {first_chunk['page_number']}, "
+            f"{metadata['rows']}x{metadata['cols']}, "
+            f"{len(table_chunks)} chunk(s), "
+            f"total_text={len(combined_text)} chars) with {tags_info}"
+        )
+        
+        # Extract entities from FULL table text for graph linking
+        table_entity_ids, table_system_ids = await self._extract_entities_for_table(
+            text=combined_text,
+            table_id=table_id,
+            doc_id=doc_id,
+        )
+        
+        # Now create TableChunk nodes and index in Qdrant
+        for chunk_idx, table_chunk in enumerate(table_chunks):
+            chunk_text = table_chunk["content"]
+            chunk_index = metadata.get("chunk_index", 0) if chunk_idx == 0 else chunk_idx
+            
+            # Extract entities from this specific chunk for Qdrant metadata
+            extraction = self.entity_extractor.extract_from_text(
+                text=chunk_text,
+                extract_systems=True,
+                extract_components=True,
+                link_hierarchy=True,
+            )
+            chunk_entity_ids = extraction["entity_ids"]
+            chunk_system_ids = extraction["systems"]
+            
+            # Create TableChunk node in Neo4j
+            logger.debug(
+                f"Creating TableChunk: parent_table_id={table_id}, "
+                f"chunk_index={chunk_index}, "
+                f"content_length={len(chunk_text)}"
+            )
+            
+            chunk_id = await self.graph.create_table_chunk(
+                parent_table_id=table_id,
+                chunk_index=chunk_index,
+                chunk_text=chunk_text,
+                total_chunks=len(table_chunks),
+                doc_id=doc_id,
+                page_number=table_chunk["page_number"],
+            )
+            
+            logger.info(
+                f"✅ Created TableChunk {chunk_id} "
+                f"({chunk_index + 1}/{len(table_chunks)}) "
+                f"for table {table_id}"
+            )
+            
+            # Index chunk in Qdrant
+            if self.vector is not None:
+                await self.vector.add_table_chunk(
+                    chunk_id=chunk_id,
+                    table_id=table_id,
+                    chunk_index=chunk_index,
+                    text=chunk_text,
+                    doc_id=doc_id,
+                    page=table_chunk["page_number"],
+                    table_title=metadata["title"],
+                    table_caption=metadata.get("caption", ""),
+                    rows=metadata["rows"],
+                    cols=metadata["cols"],
+                    total_chunks=len(table_chunks),
+                    system_ids=chunk_system_ids,
+                    entity_ids=chunk_entity_ids,
+                    owner=owner,
+                )
+                
+                logger.debug(
+                    f"Indexed TableChunk {chunk_id} in Qdrant "
+                    f"({chunk_index + 1}/{len(table_chunks)})"
+                )
+            else:
+                logger.warning(
+                    f"⚠️ VectorService is None, skipping Qdrant indexing for chunk {chunk_id}"
+                )
 
     async def _process_table_chunk_from_smart_processor(
         self,

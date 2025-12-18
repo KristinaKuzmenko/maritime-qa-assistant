@@ -218,6 +218,7 @@ class RegionClassifier:
         page: fitz.Page,
         region: Region,
         page_num: int = 0,
+        use_high_detail: bool = False,
     ) -> RegionType:
         """
         Use LLM to verify region type with retry logic for rate limits.
@@ -225,6 +226,7 @@ class RegionClassifier:
         :param page: PyMuPDF page object
         :param region: Region to verify
         :param page_num: Page number for logging
+        :param use_high_detail: If True, uses "high" detail for better schema detection (more expensive)
         :return: Verified region type
         """
         import asyncio
@@ -263,14 +265,14 @@ Answer with ONLY one word: TABLE, SCHEMA, or TEXT"""
                                     "type": "image_url",
                                     "image_url": {
                                         "url": f"data:image/png;base64,{image_base64}",
-                                        "detail": "low"  # Cost optimization
+                                        "detail": "high" if use_high_detail else "low"  # High detail for re-verification
                                     }
                                 }
                             ]
                         }
                     ],
                     max_tokens=10,
-                    temperature=0.1,
+                    temperature=0.0,
                 )
                 break  # Success, exit retry loop
             except RateLimitError as e:

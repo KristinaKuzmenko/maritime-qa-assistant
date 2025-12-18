@@ -624,6 +624,7 @@ class Neo4jClient:
                 csv_path: $csv_path,
                 bbox: $bbox,
                 text_preview: $text_preview,
+                normalized_text: $normalized_text,
                 tags: $tags
             })
             CREATE (s)-[:CONTAINS_TABLE]->(t)
@@ -646,6 +647,7 @@ class Neo4jClient:
                 csv_path: $csv_path,
                 bbox: $bbox,
                 text_preview: $text_preview,
+                normalized_text: $normalized_text,
                 tags: $tags
             })
             CREATE (d)-[:HAS_TABLE]->(t)
@@ -669,6 +671,7 @@ class Neo4jClient:
                 "csv_path": table_data.get("csv_path", ""),
                 "bbox": json.dumps(table_data.get("bbox", {})),
                 "text_preview": table_data.get("text_preview", ""),
+                "normalized_text": table_data.get("normalized_text", ""),
                 "tags": table_data.get("tags", []),
             },
         )
