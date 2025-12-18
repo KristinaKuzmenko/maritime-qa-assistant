@@ -32,13 +32,12 @@ import sys
 import os
 from pathlib import Path
 
-# Add project root to path
+# Add project root to path FIRST
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
-
-# Change to project root for relative imports
 os.chdir(project_root)
 
+# Now import from backend
 from backend.workflow import build_qa_graph, GraphState
 from backend.core.config import settings
 from backend.services.vector_service import VectorService
@@ -46,6 +45,17 @@ from backend.services.embedding_service import EmbeddingService
 from qdrant_client import QdrantClient
 from neo4j import AsyncGraphDatabase
 
+import logging
+
+# Configure logging for evaluation script
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Output to console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 # Custom Metrics for Schema/Table Evaluation
@@ -250,16 +260,29 @@ async def run_agent_on_question(
     tools_used = []
     seen_tool_calls = set()
     
-    for msg in result.get("messages", []):
+    # DEBUG: Log message types
+    logger.info(f"\n🔍 Processing {len(result.get('messages', []))} messages for tools_used")
+    
+    for idx, msg in enumerate(result.get("messages", [])):
+        msg_type = type(msg).__name__
+        logger.debug(f"   Message {idx}: {msg_type}")
+        
         # Only count tool calls from AIMessage (not ToolMessage responses)
         if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+            logger.info(f"   ✅ AIMessage {idx} has {len(msg.tool_calls)} tool_calls")
             for tc in msg.tool_calls:
                 tool_name = tc.get("name")
                 tool_id = tc.get("id")
+                logger.info(f"      - {tool_name} (id: {tool_id[:8]}...)")
                 # Deduplicate by (tool_name, tool_id) to avoid counting same call multiple times
                 if tool_name and (tool_name, tool_id) not in seen_tool_calls:
                     tools_used.append(tool_name)
                     seen_tool_calls.add((tool_name, tool_id))
+                    logger.info(f"        → Added to tools_used (total: {len(tools_used)})")
+                else:
+                    logger.info(f"        → Skipped (duplicate)")
+    
+    logger.info(f"🎯 Final tools_used: {tools_used}")
     
     # Extract contexts from enriched_context
     # Different item types have different text keys:
@@ -699,9 +722,17 @@ async def evaluate_rag_system(
     embedding_service = EmbeddingService(api_key=settings.openai_api_key)
     vector_service = VectorService(embedding_service=embedding_service)
     
+    # ⚡ OPTIMIZATION: Preload entities before building workflow
+    from backend.workflow import preload_entities, tool_ctx
+    print("⚡ Preloading entities from Neo4j...")
+    tool_ctx.neo4j_driver = neo4j_driver
+    known_entities = await preload_entities(neo4j_driver)
+    tool_ctx.known_entities = known_entities
+    tool_ctx.entities_loaded = True
+    print(f"✅ Preloaded {len(known_entities)} entities")
+    
     workflow = build_qa_graph(qdrant_client, neo4j_driver, vector_service)
     print("✅ Workflow ready")
-    print("📋 Entity detection will be initialized on first question")
     
     # Run agent on all questions
     print(f"\n🚀 Running agent on {len(eval_data)} questions...")
@@ -878,23 +909,15 @@ async def evaluate_rag_system(
         temperature=0
     )
     
-    # Create embeddings using modern RAGAS OpenAIEmbeddings (direct import)
-    try:
-        from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
-        ragas_embeddings = RagasOpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=settings.openai_api_key
-        )
-    except Exception as e:
-        # Fallback to LangchainEmbeddingsWrapper if modern API not available
-        print(f"   ⚠️ Modern RAGAS embeddings failed ({e}), using LangChain wrapper")
-        from ragas.embeddings import LangchainEmbeddingsWrapper
-        from langchain_openai import OpenAIEmbeddings
-        langchain_embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            openai_api_key=settings.openai_api_key
-        )
-        ragas_embeddings = LangchainEmbeddingsWrapper(langchain_embeddings)
+    # Create embeddings using LangChain wrapper (most compatible)
+    from langchain_openai import OpenAIEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    
+    langchain_embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        api_key=settings.openai_api_key  # Use api_key instead of openai_api_key
+    )
+    ragas_embeddings = LangchainEmbeddingsWrapper(langchain_embeddings)
     
     try:
         ragas_results = evaluate(
