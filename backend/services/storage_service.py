@@ -48,9 +48,13 @@ class StorageService:
             if not self.bucket_name:
                 raise ValueError("s3_bucket_name is required for S3 storage")
             
-            self.region = kwargs.get('s3_region', 'us-east-1')
+            self.region = kwargs.get('aws_region', 'eu-central-1')
             self.aws_access_key = kwargs.get('aws_access_key_id')
             self.aws_secret_key = kwargs.get('aws_secret_access_key')
+            
+            # S3 prefix/folder (e.g., 'data' if files are stored in data/schemas/...)
+            # Handle None value from Optional[str] config
+            self.s3_prefix = (kwargs.get('s3_prefix') or '').strip('/')
             
             # Create session
             self.session = aioboto3.Session(
@@ -62,7 +66,8 @@ class StorageService:
             # CloudFront distribution (optional, for faster access)
             self.cloudfront_domain = kwargs.get('cloudfront_domain')
             
-            logger.info(f"S3 storage initialized: {self.bucket_name}")
+            prefix_info = f" with prefix '{self.s3_prefix}'" if self.s3_prefix else ""
+            logger.info(f"S3 storage initialized: {self.bucket_name}{prefix_info}")
         else:
             raise ValueError(f"Unsupported storage type: {storage_type}")
     
@@ -155,6 +160,9 @@ class StorageService:
         if not content_type:
             content_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
         
+        # Add S3 prefix if configured (e.g., 'data' -> 'data/schemas/...')
+        s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+        
         # Prepare content
         if isinstance(content, bytes):
             body = content
@@ -169,20 +177,18 @@ class StorageService:
         async with self.session.client('s3') as s3:
             await s3.put_object(
                 Bucket=self.bucket_name,
-                Key=file_path,
+                Key=s3_key,
                 Body=body,
                 ContentType=content_type,
                 # Make publicly readable (adjust based on your security needs)
                 # ACL='public-read',
             )
         
-        logger.debug(f"File saved to S3: s3://{self.bucket_name}/{file_path}")
+        logger.debug(f"File saved to S3: s3://{self.bucket_name}/{s3_key}")
         
-        # Return URL for file access
-        if self.cloudfront_domain:
-            return f"https://{self.cloudfront_domain}/{file_path}"
-        else:
-            return f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{file_path}"
+        # Return relative path WITHOUT prefix (for consistency with local storage)
+        # This keeps Neo4j paths simple: 'schemas/...' not 'data/schemas/...'
+        return file_path
     
     # -------------------------------------------------------------------------
     # Optional methods (add only if needed)
@@ -281,22 +287,56 @@ class StorageService:
         except:
             return False
     
-    def get_file_url(self, file_path: str) -> str:
+    def get_file_url(self, file_path: str, presigned: bool = False, expiration: int = 3600) -> str:
         """
-        Get public URL for file access.
+        Get public or presigned URL for file access.
         
-        :param file_path: Relative file path
-        :return: Public URL
+        :param file_path: Relative file path (without s3_prefix)
+        :param presigned: Generate presigned URL for S3 (temporary access)
+        :param expiration: URL expiration time in seconds (for presigned URLs)
+        :return: Public or presigned URL
         """
         if self.storage_type == "local":
             # Return URL that can be served by your web server
             return f"{self.base_url}/{file_path}"
         else:
-            # S3 public URL
+            # S3: Add prefix if configured (e.g., 'data' -> 'data/schemas/...')
+            s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+            
+            # S3: return presigned URL if requested, otherwise public URL
+            if presigned:
+                # Generate presigned URL synchronously (for non-async contexts)
+                try:
+                    import boto3
+                    s3_client = boto3.client(
+                        's3',
+                        aws_access_key_id=self.aws_access_key,
+                        aws_secret_access_key=self.aws_secret_key,
+                        region_name=self.region
+                    )
+                    url = s3_client.generate_presigned_url(
+                        'get_object',
+                        Params={'Bucket': self.bucket_name, 'Key': s3_key},
+                        ExpiresIn=expiration
+                    )
+                    # Check if URL has query parameters (AWS signature)
+                    has_signature = '?' in url and 'X-Amz' in url
+                    logger.info(f"✅ Presigned URL: {s3_key[:60]}... | Has signature: {has_signature}")
+                    if not has_signature:
+                        logger.warning(f"⚠️ URL missing AWS signature! Full URL: {url[:150]}")
+                    return url
+                except ImportError:
+                    logger.error("❌ boto3 not installed! Install with: pip install boto3 aioboto3")
+                    logger.error("   Falling back to public URL (may not work for private buckets)")
+                except Exception as e:
+                    logger.error(f"❌ Error generating presigned URL for {s3_key}: {e}")
+                    # Fallback to public URL
+            
+            # Public URL (works only if bucket has public read access)
             if self.cloudfront_domain:
-                return f"https://{self.cloudfront_domain}/{file_path}"
+                return f"https://{self.cloudfront_domain}/{s3_key}"
             else:
-                return f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{file_path}"
+                return f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{s3_key}"
     
     async def get_presigned_url(
         self, 
@@ -307,23 +347,26 @@ class StorageService:
         Generate presigned URL for temporary file access (S3 only).
         For local storage, returns regular URL.
         
-        :param file_path: Relative file path
+        :param file_path: Relative file path (without s3_prefix)
         :param expiration: URL expiration time in seconds
         :return: Presigned URL
         """
         if self.storage_type == "local":
             return self.get_file_url(file_path)
         
+        # S3: Add prefix if configured
+        s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+        
         try:
             async with self.session.client('s3') as s3:
                 url = await s3.generate_presigned_url(
                     'get_object',
-                    Params={'Bucket': self.bucket_name, 'Key': file_path},
+                    Params={'Bucket': self.bucket_name, 'Key': s3_key},
                     ExpiresIn=expiration
                 )
             return url
         except ClientError as e:
-            logger.error(f"Error generating presigned URL: {e}")
+            logger.error(f"Error generating presigned URL for {s3_key}: {e}")
             # Fallback to public URL
             return self.get_file_url(file_path)
     
@@ -357,13 +400,14 @@ class StorageService:
                     except:
                         pass
             else:
-                # S3: list and delete
+                # S3: Add prefix and list/delete
+                s3_prefix = f"{self.s3_prefix}/{prefix}" if self.s3_prefix else prefix
                 async with self.session.client('s3') as s3:
                     try:
                         paginator = s3.get_paginator('list_objects_v2')
                         async for page in paginator.paginate(
                             Bucket=self.bucket_name,
-                            Prefix=prefix
+                            Prefix=s3_prefix
                         ):
                             if 'Contents' in page:
                                 for obj in page['Contents']:

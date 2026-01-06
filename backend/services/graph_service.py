@@ -1050,28 +1050,447 @@ class Neo4jClient:
             "include_connections": include_connections
         })
     
+    def _sanitize_lucene_query(self, query: str) -> str:
+        """
+        Sanitize query for Neo4j fulltext search (Lucene syntax).
+        
+        - Replace Unicode spaces/dashes with standard ASCII
+        - Escape special Lucene operators that cause parsing errors
+        - Preserve quoted phrases
+        """
+        import re
+        
+        # Step 1: Normalize Unicode characters
+        # Replace non-breaking spaces and other Unicode spaces with regular space
+        query = query.replace('\u00A0', ' ')  # No-break space
+        query = query.replace('\u202F', ' ')  # Narrow no-break space
+        query = query.replace('\u2009', ' ')  # Thin space
+        query = query.replace('\u200B', '')   # Zero-width space
+        
+        # Replace Unicode dashes with regular hyphen
+        query = query.replace('\u2011', '-')  # Non-breaking hyphen
+        query = query.replace('\u2012', '-')  # Figure dash
+        query = query.replace('\u2013', '-')  # En dash
+        query = query.replace('\u2014', '-')  # Em dash
+        query = query.replace('\u2015', '-')  # Horizontal bar
+        
+        # Step 2: Escape Lucene special characters (except inside quotes)
+        # Special chars: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+        
+        parts = []
+        in_quotes = False
+        current = []
+        
+        for char in query:
+            if char == '"':
+                if current:
+                    text = ''.join(current)
+                    if not in_quotes:
+                        # Escape Lucene special chars outside quotes
+                        for special_char in ['+', '-', '&', '|', '!', '(', ')', 
+                                            '{', '}', '[', ']', '^', '~', '*', 
+                                            '?', ':', '\\', '/']:
+                            text = text.replace(special_char, '\\' + special_char)
+                    parts.append(text)
+                    current = []
+                parts.append('"')
+                in_quotes = not in_quotes
+            else:
+                current.append(char)
+        
+        if current:
+            text = ''.join(current)
+            if not in_quotes:
+                # Escape Lucene special chars
+                for special_char in ['+', '-', '&', '|', '!', '(', ')', 
+                                    '{', '}', '[', ']', '^', '~', '*', 
+                                    '?', ':', '\\', '/']:
+                    text = text.replace(special_char, '\\' + special_char)
+            parts.append(text)
+        
+        sanitized = ''.join(parts)
+        
+        # Step 3: Clean up multiple spaces
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        
+        return sanitized
+    
     async def search_sections_fulltext(
         self,
         query: str,
         limit: int = 10,
         doc_id: Optional[str] = None,
+        min_score: float = 0.5,
+        include_content: bool = False,
+        section_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Full-text search in sections (fallback)."""
-        cypher_query = """
-        CALL db.index.fulltext.queryNodes('sectionSearch', $query) 
-        YIELD node, score
-        WHERE node:Section AND ($doc_id IS NULL OR node.doc_id = $doc_id)
-        MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(node)
-        RETURN node {
-                   .*,
-                   doc_title: d.title,
-                   chapter_title: c.title,
-                   search_score: score
-               } as section
-        ORDER BY score DESC
+        """
+        Full-text search in sections using Neo4j BM25 index.
+        
+        Args:
+            query: Search query (use quotes for exact match: '"PU3" OR "7M2"')
+            limit: Max results
+            doc_id: Optional document filter
+            min_score: Minimum Lucene score
+            include_content: If True, return full section content
+            section_ids: Optional list to filter/re-rank only specific sections
+        """
+        where_clause = "score > $min_score"
+        if section_ids:
+            where_clause += " AND node.id IN $section_ids"
+        if doc_id:
+            where_clause += " AND node.doc_id = $doc_id"
+        
+        if include_content:
+            cypher_query = f"""
+            CALL db.index.fulltext.queryNodes('sectionSearch', $query)
+            YIELD node, score
+            WHERE {where_clause}
+            OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(node)
+            RETURN node.id AS section_id,
+                   node.doc_id AS doc_id,
+                   node.title AS title,
+                   node.content AS content,
+                   node.page_start AS page_start,
+                   node.page_end AS page_end,
+                   doc.title AS doc_title,
+                   score
+            ORDER BY score DESC
+            LIMIT $limit
+            """
+        else:
+            cypher_query = f"""
+            CALL db.index.fulltext.queryNodes('sectionSearch', $query)
+            YIELD node, score
+            WHERE {where_clause}
+            OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(node)
+            RETURN node.id AS section_id,
+                   node.doc_id AS doc_id,
+                   node.title AS title,
+                   doc.title AS doc_title,
+                   score
+            ORDER BY score DESC
+            LIMIT $limit
+            """
+        
+        # Sanitize query to prevent Lucene parsing errors
+        sanitized_query = self._sanitize_lucene_query(query)
+        if sanitized_query != query:
+            logger.debug(f"Lucene query sanitized: '{query}' → '{sanitized_query}'")
+        
+        params = {
+            "query": sanitized_query,
+            "min_score": min_score,
+            "limit": limit,
+        }
+        if section_ids:
+            params["section_ids"] = section_ids
+        if doc_id:
+            params["doc_id"] = doc_id
+            
+        return await self.run_query(cypher_query, params)
+    
+    # -------------------------------------------------------------------------
+    # Workflow helper methods (fetching full content)
+    # -------------------------------------------------------------------------
+    
+    async def fetch_table_full(self, table_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch full table with text from Neo4j.
+        Table.normalized_text stores complete linearized table text.
+        """
+        query = """
+        MATCH (t:Table {id: $table_id})
+        OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s:Section)-[:CONTAINS_TABLE]->(t)
+        RETURN 
+            t.id AS table_id,
+            t.title AS table_title,
+            t.caption AS caption,
+            t.page_number AS page,
+            t.rows AS rows,
+            t.cols AS cols,
+            t.file_path AS file_path,
+            t.normalized_text AS table_text,
+            t.doc_id AS doc_id,
+            doc.title AS doc_title,
+            s.title AS section_title
+        """
+        result = await self.run_query(query, {"table_id": table_id})
+        if not result:
+            return None
+        
+        record = result[0]
+        return {
+            "table_id": record["table_id"],
+            "doc_id": record["doc_id"],
+            "doc_title": record.get("doc_title") or "Unknown",
+            "section_title": record.get("section_title"),
+            "title": record["table_title"] or "",
+            "caption": record.get("caption") or "",
+            "page": record["page"],
+            "rows": record["rows"],
+            "cols": record["cols"],
+            "file_path": record.get("file_path"),
+            "text": record.get("table_text") or "",
+        }
+    
+    async def fetch_schema_full(self, schema_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch full schema metadata including text_context and llm_summary.
+        """
+        query = """
+        MATCH (sc:Schema {id: $schema_id})
+        OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s:Section)-[:CONTAINS_SCHEMA]->(sc)
+        RETURN 
+            sc.id AS schema_id,
+            sc.title AS title,
+            sc.caption AS caption,
+            sc.text_context AS text_context,
+            sc.llm_summary AS llm_summary,
+            sc.page_number AS page,
+            sc.file_path AS file_path,
+            sc.thumbnail_path AS thumbnail_path,
+            sc.doc_id AS doc_id,
+            doc.title AS doc_title,
+            s.title AS section_title
+        LIMIT 1
+        """
+        result = await self.run_query(query, {"schema_id": schema_id})
+        if not result:
+            return None
+        
+        record = result[0]
+        doc_title = record.get("doc_title")
+        
+        # Fallback: direct doc lookup if doc_title is None
+        if not doc_title and record.get("doc_id"):
+            doc_query = "MATCH (d:Document {id: $doc_id}) RETURN d.title AS title"
+            doc_result = await self.run_query(doc_query, {"doc_id": record["doc_id"]})
+            if doc_result:
+                doc_title = doc_result[0].get("title")
+        
+        return {
+            "schema_id": record["schema_id"],
+            "doc_id": record["doc_id"],
+            "doc_title": doc_title or "Unknown",
+            "section_title": record.get("section_title"),
+            "title": record["title"],
+            "caption": record.get("caption") or "",
+            "text_context": record.get("text_context") or "",
+            "llm_summary": record.get("llm_summary") or "",
+            "page": record["page"],
+            "file_path": record.get("file_path"),
+            "thumbnail_path": record.get("thumbnail_path"),
+        }
+    
+    async def fetch_importance_scores(self, section_ids: List[str]) -> Dict[str, float]:
+        """Fetch importance_score for sections."""
+        if not section_ids:
+            return {}
+        
+        query = """
+        MATCH (s:Section)
+        WHERE s.id IN $section_ids
+        RETURN s.id AS section_id, s.importance_score AS importance
+        """
+        result = await self.run_query(query, {"section_ids": section_ids})
+        return {r["section_id"]: r.get("importance") or 0.5 for r in result}
+    
+    async def get_all_entities(self) -> List[str]:
+        """
+        Get all entity names and codes for preloading.
+        Returns list of entity identifiers (names and codes) in original case.
+        """
+        query = """
+        MATCH (e:Entity)
+        RETURN DISTINCT 
+            e.name AS entity_name,
+            e.code AS entity_code
+        """
+        result = await self.run_query(query, {})
+        
+        entities = set()
+        for rec in result:
+            name = rec.get("entity_name")
+            code = rec.get("entity_code")
+            
+            if name and len(name) > 2:
+                entities.add(name)  # Keep original case
+            if code and code.strip():
+                entities.add(code)
+        
+        return sorted(list(entities))
+    
+    async def search_entities_by_codes(
+        self,
+        codes: List[str],
+        query_words: Optional[set] = None,
+        doc_ids: Optional[List[str]] = None,
+        include_tables: bool = True,
+        include_schemas: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Search for content related to entities by codes or query words.
+        
+        Args:
+            codes: Equipment codes to search (e.g., ['PU3', '7M2'])
+            query_words: Additional words to match against entity names
+            doc_ids: Optional document filter
+            include_tables: Include related tables
+            include_schemas: Include related schemas
+            
+        Returns:
+            Dict with sections, tables, schemas related to matched entities
+        """
+        results = {
+            "entities_found": [],
+            "sections": [],
+            "tables": [],
+            "schemas": [],
+        }
+        
+        # Build entity match query
+        entity_query = """
+        UNWIND $codes AS code
+        MATCH (e:Entity)
+        WHERE e.code = code OR toLower(e.name) CONTAINS toLower(code)
+        RETURN DISTINCT e.id AS id, e.code AS code, e.name AS name
+        """
+        entity_result = await self.run_query(entity_query, {"codes": codes})
+        
+        if not entity_result:
+            return results
+        
+        entity_ids = [r["code"] for r in entity_result]
+        results["entities_found"] = entity_ids
+        
+        # Get sections describing these entities
+        section_query = """
+        UNWIND $entity_ids AS eid
+        MATCH (s:Section)-[:DESCRIBES]->(e:Entity {code: eid})
+        WHERE $doc_ids IS NULL OR s.doc_id IN $doc_ids
+        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
+        
+        WITH s, e, d,
+             CASE 
+               WHEN toLower(s.title) CONTAINS toLower(e.name) THEN 100
+               ELSE 1 
+             END as title_boost,
+             size(split(toLower(s.content), toLower(e.name))) - 1 as mention_count
+        WHERE mention_count > 0
+        
+        RETURN DISTINCT 
+            s.id AS section_id,
+            s.title AS section_title,
+            s.content AS content,
+            s.page_start AS page_start,
+            s.page_end AS page_end,
+            s.doc_id AS doc_id,
+            d.title AS doc_title,
+            e.code AS entity_code,
+            e.name AS entity_name,
+            s.importance_score AS importance,
+            title_boost * (1 + mention_count) as relevance_score,
+            mention_count
+        ORDER BY relevance_score DESC, s.importance_score DESC
+        LIMIT 10
+        """
+        section_result = await self.run_query(section_query, {
+            "entity_ids": entity_ids, 
+            "doc_ids": doc_ids
+        })
+        
+        results["sections"] = [
+            {
+                "section_id": r["section_id"],
+                "section_title": r["section_title"],
+                "content": r["content"],
+                "page_start": r["page_start"],
+                "page_end": r["page_end"],
+                "doc_id": r["doc_id"],
+                "doc_title": r["doc_title"],
+                "matched_entity": r["entity_name"],
+                "score": r.get("importance", 0.5),
+                "relevance_score": r.get("relevance_score", 1.0),
+                "mention_count": r.get("mention_count", 0),
+            }
+            for r in section_result
+        ]
+        
+        # Get tables mentioning these entities
+        if include_tables:
+            table_query = """
+            UNWIND $entity_ids AS eid
+            MATCH (t:Table)-[:MENTIONS]->(e:Entity {code: eid})
+            WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
+            OPTIONAL MATCH (doc:Document)-[:HAS_TABLE]->(t)
+            RETURN DISTINCT 
+                t.id AS table_id,
+                t.title AS table_title,
+                t.caption AS caption,
+                t.page_number AS page,
+                t.file_path AS file_path,
+                t.doc_id AS doc_id,
+                doc.title AS doc_title,
+                e.name AS matched_entity
+            LIMIT 5
+            """
+            table_result = await self.run_query(table_query, {
+                "entity_ids": entity_ids, 
+                "doc_ids": doc_ids
+            })
+            results["tables"] = table_result
+        
+        # Get schemas depicting these entities
+        if include_schemas:
+            schema_query = """
+            UNWIND $entity_ids AS eid
+            MATCH (sc:Schema)-[:DEPICTS]->(e:Entity {code: eid})
+            WHERE $doc_ids IS NULL OR sc.doc_id IN $doc_ids
+            OPTIONAL MATCH (doc:Document)-[:HAS_SCHEMA]->(sc)
+            RETURN DISTINCT 
+                sc.id AS schema_id,
+                sc.title AS title,
+                sc.caption AS caption,
+                sc.page_number AS page,
+                sc.file_path AS file_path,
+                sc.doc_id AS doc_id,
+                doc.title AS doc_title,
+                e.name AS matched_entity
+            LIMIT 5
+            """
+            schema_result = await self.run_query(schema_query, {
+                "entity_ids": entity_ids, 
+                "doc_ids": doc_ids
+            })
+            results["schemas"] = schema_result
+        
+        return results
+    
+    async def get_neighbor_sections(
+        self, 
+        section_ids: List[str],
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Get neighboring sections from same chapter."""
+        query = """
+        UNWIND $section_ids AS sid
+        MATCH (s:Section {id: sid})
+        MATCH (c:Chapter)-[:HAS_SECTION]->(s)
+        MATCH (c)-[:HAS_SECTION]->(neighbor:Section)
+        WHERE neighbor.id <> sid
+          AND abs(neighbor.section_number - s.section_number) <= 1
+        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c)
+        RETURN DISTINCT
+            neighbor.id AS section_id,
+            neighbor.title AS title,
+            neighbor.content AS content,
+            neighbor.page_start AS page_start,
+            neighbor.doc_id AS doc_id,
+            d.title AS doc_title
         LIMIT $limit
         """
-        return await self.run_query(cypher_query, {"query": query, "doc_id": doc_id, "limit": limit})
+        return await self.run_query(query, {"section_ids": section_ids, "limit": limit})
     
     # -------------------------------------------------------------------------
     # Section similarity operations
@@ -1390,4 +1809,369 @@ class Neo4jClient:
                 doc["metadata"] = {}
         
         return doc
-   
+    
+    # -------------------------------------------------------------------------
+    # Entity search methods (used by neo4j_entity_search tool)
+    # -------------------------------------------------------------------------
+    
+    async def unified_entity_search(
+        self,
+        entity_codes: List[str],
+        equipment_codes: List[str],
+        phrases: List[str],
+        limit: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """
+        Unified entity search combining exact codes, equipment codes, and phrases.
+        
+        Args:
+            entity_codes: Exact entity codes from dictionary
+            equipment_codes: Equipment codes like PU3, P-101
+            phrases: Multi-word phrases like "cut cock"
+            limit: Max results
+            
+        Returns:
+            List of entities with code, name, entity_type, priority, source
+        """
+        query = """
+        // Priority 1: Exact match by entity codes from dictionary
+        CALL {
+            WITH $entity_codes AS codes
+            UNWIND codes AS code
+            MATCH (e:Entity) WHERE e.code = code
+            RETURN e.code AS code, e.name AS name, e.entity_type AS entity_type, 1 AS priority, 'exact_code' AS source
+        }
+        RETURN code, name, entity_type, priority, source
+        
+        UNION
+        
+        // Priority 2: Equipment codes in entity names (PU3 in "Pump PU3")
+        CALL {
+            WITH $equipment_codes AS codes
+            MATCH (e:Entity)
+            WHERE ANY(eq_code IN codes WHERE toUpper(e.name) CONTAINS eq_code)
+            RETURN e.code AS code, e.name AS name, e.entity_type AS entity_type, 2 AS priority, 'equipment_code' AS source
+            LIMIT 10
+        }
+        RETURN code, name, entity_type, priority, source
+        
+        UNION
+        
+        // Priority 3: Multi-word phrase match ("cut cock" in "Cut Cock Valve")
+        CALL {
+            WITH $phrases AS phrase_list
+            MATCH (e:Entity)
+            WHERE SIZE(phrase_list) > 0 
+              AND ANY(phrase IN phrase_list WHERE toLower(e.name) CONTAINS phrase)
+            RETURN e.code AS code, e.name AS name, e.entity_type AS entity_type, 3 AS priority, 'phrase' AS source
+            ORDER BY size(e.name) ASC
+            LIMIT 10
+        }
+        RETURN code, name, entity_type, priority, source
+        
+        ORDER BY priority, name
+        LIMIT $limit
+        """
+        
+        return await self.run_query(query, {
+            "entity_codes": entity_codes or [],
+            "equipment_codes": equipment_codes or [],
+            "phrases": phrases or [],
+            "limit": limit,
+        })
+    
+    async def search_entities_by_name(
+        self,
+        full_name: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Search entities by full name (exact match)."""
+        query = """
+        MATCH (e:Entity)
+        WHERE toLower(e.name) CONTAINS $full_name
+        RETURN e.code AS code, e.name AS name, 10 AS match_count
+        ORDER BY size(e.name) ASC
+        LIMIT $limit
+        """
+        return await self.run_query(query, {"full_name": full_name.lower(), "limit": limit})
+    
+    async def search_entities_by_prefix(
+        self,
+        prefix: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Search entities by name prefix (e.g., PT → pressure transmitter)."""
+        query = """
+        MATCH (e:Entity)
+        WHERE toLower(e.name) STARTS WITH $prefix
+        RETURN e.code AS code, e.name AS name, 8 AS match_count
+        LIMIT $limit
+        """
+        return await self.run_query(query, {"prefix": prefix.lower(), "limit": limit})
+    
+    async def find_sections_by_entity(
+        self,
+        entity_ids: List[str],
+        doc_ids: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find sections via DESCRIBES relationship with relevance scoring.
+        Boosts sections where entity name appears in title or multiple times in content.
+        """
+        query = """
+        UNWIND $entity_ids AS eid
+        MATCH (s:Section)-[:DESCRIBES]->(e:Entity {code: eid})
+        WHERE $doc_ids IS NULL OR s.doc_id IN $doc_ids
+        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
+        
+        WITH s, e, d,
+             CASE 
+               WHEN toLower(s.title) CONTAINS toLower(e.name) THEN 100
+               ELSE 1 
+             END as title_boost,
+             size(split(toLower(s.content), toLower(e.name))) - 1 as mention_count
+        
+        WHERE mention_count > 0
+        
+        RETURN DISTINCT 
+            s.id AS section_id,
+            s.title AS section_title,
+            s.content AS content,
+            s.page_start AS page_start,
+            s.page_end AS page_end,
+            s.doc_id AS doc_id,
+            d.title AS doc_title,
+            e.code AS entity_code,
+            e.name AS entity_name,
+            s.importance_score AS importance,
+            title_boost * (1 + mention_count) as relevance_score,
+            mention_count
+        ORDER BY relevance_score DESC, s.importance_score DESC
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "entity_ids": entity_ids,
+            "doc_ids": doc_ids,
+            "limit": limit,
+        })
+    
+    async def find_sections_via_table_mentions(
+        self,
+        entity_ids: List[str],
+        doc_ids: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find sections via Table-[:MENTIONS]->Entity path.
+        Used when entities only appear in tables, not in section text.
+        """
+        query = """
+        UNWIND $entity_ids AS eid
+        MATCH (t:Table)-[:MENTIONS]->(e:Entity {code: eid})
+        WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
+        
+        OPTIONAL MATCH (s:Section)-[:CONTAINS_TABLE]->(t)
+        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
+        
+        WHERE s IS NOT NULL
+        
+        RETURN DISTINCT
+            s.id AS section_id,
+            s.title AS section_title,
+            s.content AS content,
+            s.page_start AS page_start,
+            s.page_end AS page_end,
+            s.doc_id AS doc_id,
+            d.title AS doc_title,
+            t.id AS table_id,
+            t.title AS table_title,
+            e.code AS entity_code,
+            e.name AS entity_name,
+            s.importance_score AS importance
+        ORDER BY s.importance_score DESC
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "entity_ids": entity_ids,
+            "doc_ids": doc_ids,
+            "limit": limit,
+        })
+    
+    async def fetch_tables_by_ids(
+        self,
+        table_ids: List[str],
+        entity_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch tables by IDs with optional entity filter."""
+        query = """
+        UNWIND $table_ids AS tid
+        MATCH (t:Table {id: tid})
+        OPTIONAL MATCH (d:Document)-[:HAS_TABLE]->(t)
+        OPTIONAL MATCH (tc:TableChunk)-[:PART_OF]->(t)
+        OPTIONAL MATCH (t)-[:MENTIONS]->(e:Entity)
+        WHERE $entity_ids IS NULL OR e.code IN $entity_ids
+        WITH t, d, collect(DISTINCT tc.text_preview) AS chunk_previews, collect(DISTINCT e.name) AS entity_names
+        RETURN DISTINCT 
+            t.id AS table_id,
+            t.title AS table_title,
+            t.caption AS caption,
+            t.text_preview AS text_preview,
+            t.page_number AS page,
+            t.rows AS rows,
+            t.cols AS cols,
+            t.csv_path AS csv_path,
+            t.file_path AS file_path,
+            t.doc_id AS doc_id,
+            d.title AS doc_title,
+            chunk_previews,
+            entity_names
+        """
+        return await self.run_query(query, {
+            "table_ids": table_ids,
+            "entity_ids": entity_ids,
+        })
+    
+    async def find_tables_by_entity(
+        self,
+        entity_ids: List[str],
+        doc_ids: Optional[List[str]] = None,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Find tables via MENTIONS relationship."""
+        query = """
+        UNWIND $entity_ids AS eid
+        MATCH (t:Table)-[:MENTIONS]->(e:Entity {code: eid})
+        WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
+        OPTIONAL MATCH (d:Document)-[:HAS_TABLE]->(t)
+        OPTIONAL MATCH (tc:TableChunk)-[:PART_OF]->(t)
+        WITH e, t, d, collect(tc.text_preview) AS chunk_previews
+        RETURN DISTINCT 
+            t.id AS table_id,
+            t.title AS table_title,
+            t.caption AS caption,
+            t.text_preview AS text_preview,
+            t.page_number AS page,
+            t.rows AS rows,
+            t.cols AS cols,
+            t.csv_path AS csv_path,
+            t.file_path AS file_path,
+            t.doc_id AS doc_id,
+            d.title AS doc_title,
+            e.code AS entity_code,
+            e.name AS entity_name,
+            chunk_previews
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "entity_ids": entity_ids,
+            "doc_ids": doc_ids,
+            "limit": limit,
+        })
+    
+    async def find_schemas_by_entity(
+        self,
+        entity_ids: List[str],
+        doc_ids: Optional[List[str]] = None,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Find schemas via DEPICTS relationship."""
+        query = """
+        UNWIND $entity_ids AS eid
+        MATCH (sc:Schema)-[:DEPICTS]->(e:Entity {code: eid})
+        WHERE $doc_ids IS NULL OR sc.doc_id IN $doc_ids
+        OPTIONAL MATCH (d:Document)-[:HAS_SCHEMA]->(sc)
+        RETURN DISTINCT 
+            sc.id AS schema_id,
+            sc.title AS title,
+            sc.caption AS caption,
+            sc.text_context AS text_context,
+            sc.llm_summary AS llm_summary,
+            sc.page_number AS page,
+            sc.file_path AS file_path,
+            sc.thumbnail_path AS thumbnail_path,
+            sc.doc_id AS doc_id,
+            d.title AS doc_title,
+            e.code AS entity_code,
+            e.name AS entity_name
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "entity_ids": entity_ids,
+            "doc_ids": doc_ids,
+            "limit": limit,
+        })
+    
+    async def find_tables_by_section_and_codes(
+        self,
+        section_ids: List[str],
+        doc_ids: List[str],
+        equipment_codes: List[str],
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Find tables in sections OR matching equipment codes."""
+        query = """
+        MATCH (t:Table)
+        WHERE t.doc_id IN $doc_ids
+          AND (
+            EXISTS { MATCH (s:Section)-[:CONTAINS_TABLE]->(t) WHERE s.id IN $section_ids }
+            OR ANY(code IN $codes WHERE 
+                toUpper(t.text_preview) CONTAINS code 
+                OR toUpper(t.caption) CONTAINS code
+                OR toUpper(t.title) CONTAINS code
+            )
+          )
+        RETURN DISTINCT
+            t.id AS table_id,
+            t.title AS table_title,
+            t.caption AS caption,
+            t.text_preview AS text_preview,
+            t.page_number AS page,
+            t.file_path AS file_path,
+            t.doc_id AS doc_id
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "section_ids": section_ids,
+            "doc_ids": doc_ids,
+            "codes": equipment_codes,
+            "limit": limit,
+        })
+    
+    async def find_schemas_by_section_and_codes(
+        self,
+        section_ids: List[str],
+        doc_ids: List[str],
+        equipment_codes: List[str],
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Find schemas in sections OR matching equipment codes."""
+        query = """
+        MATCH (sc:Schema)
+        WHERE sc.doc_id IN $doc_ids
+          AND (
+            EXISTS { MATCH (s:Section)-[:CONTAINS_SCHEMA]->(sc) WHERE s.id IN $section_ids }
+            OR ANY(code IN $codes WHERE 
+                toUpper(sc.llm_summary) CONTAINS code
+                OR toUpper(sc.caption) CONTAINS code
+                OR toUpper(sc.title) CONTAINS code
+            )
+          )
+        RETURN DISTINCT
+            sc.id AS schema_id,
+            sc.title AS title,
+            sc.caption AS caption,
+            sc.text_context AS text_context,
+            sc.llm_summary AS llm_summary,
+            sc.page_number AS page,
+            sc.file_path AS file_path,
+            sc.thumbnail_path AS thumbnail_path,
+            sc.doc_id AS doc_id
+        LIMIT $limit
+        """
+        return await self.run_query(query, {
+            "section_ids": section_ids,
+            "doc_ids": doc_ids,
+            "codes": equipment_codes,
+            "limit": limit,
+        })

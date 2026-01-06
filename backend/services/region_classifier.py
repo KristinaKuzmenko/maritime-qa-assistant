@@ -75,6 +75,7 @@ class RegionClassifier:
             'high_confidence_yolo': 0,
             'llm_verified': 0,
             'llm_changed_decision': 0,
+            'schema_preserved_from_text': 0,  # Cases where YOLO SCHEMA overrode LLM TEXT
         }
         
         logger.info(
@@ -148,7 +149,7 @@ class RegionClassifier:
         
         elif caption_type == 'figure':
             # Check if YOLO was very confident about TABLE type
-            if yolo_type == RegionType.TABLE and yolo_conf >= 0.8:
+            if region.region_type == RegionType.TABLE and yolo_conf >= 0.8:
                 self.stats['caption_detected'] += 1
                 logger.info(
                     f"📊 Page {page_num}: Figure caption found but YOLO confident TABLE "
@@ -187,6 +188,24 @@ class RegionClassifier:
                 
                 if llm_type != region.region_type:
                     self.stats['llm_changed_decision'] += 1
+                    
+                    # CRITICAL: If YOLO says SCHEMA with reasonable confidence, and LLM says TEXT
+                    # Trust YOLO to avoid losing diagrams (LLM can misclassify diagrams with text)
+                    # BUT also extract text from this region (dual extraction)
+                    if (region.region_type == RegionType.SCHEMA 
+                        and llm_type == RegionType.TEXT 
+                        and yolo_conf >= 0.5):
+                        self.stats['schema_preserved_from_text'] += 1
+                        logger.warning(
+                            f"⚠️ SCHEMA PRESERVATION + TEXT EXTRACTION: Page {page_num} - "
+                            f"YOLO detected SCHEMA (conf={yolo_conf:.3f}), but LLM says TEXT. "
+                            f"Will extract as SCHEMA AND extract text from bbox. bbox={region.bbox.to_dict()}"
+                        )
+                        # Mark for dual extraction
+                        region.extract_text_also = True
+                        # Keep original YOLO type (SCHEMA)
+                        return region.region_type
+                    
                     logger.warning(
                         f"🔄 Page {page_num}: LLM OVERRIDE - "
                         f"YOLO said {yolo_type}, LLM says {llm_type.value} "
@@ -240,14 +259,16 @@ class RegionClassifier:
         image_bytes = self._render_region_as_png(page, region.bbox)
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
         
-        # Simple, focused prompt with TEXT option
+        # Improved prompt that's more liberal about diagrams
         prompt = """Analyze this image from a technical maritime document.
 
 What is this?
 
 - TABLE: structured data grid with rows and columns (specifications, lists, data tables)
-- SCHEMA: technical diagram (P&ID, electrical schematic, equipment layout, flowchart, drawing)
-- TEXT: regular text paragraph, heading, or text block (NOT a table or diagram)
+- SCHEMA: technical diagram, drawing, or figure (P&ID, electrical schematic, equipment layout, flowchart, mechanical drawing, illustration with technical symbols, diagrams with text labels)
+- TEXT: ONLY plain text paragraphs or headings with NO diagrams, drawings, or technical symbols
+
+IMPORTANT: If you see ANY technical drawing, diagram, illustration, or schematic elements (lines, symbols, equipment shapes, arrows), classify as SCHEMA even if it contains text labels or annotations.
 
 Answer with ONLY one word: TABLE, SCHEMA, or TEXT"""
 
@@ -478,4 +499,6 @@ Answer with ONLY one word: TABLE, SCHEMA, or TEXT"""
         if self.stats['llm_verified'] > 0:
             logger.info(f"LLM changed decision: {self.stats['llm_changed_decision']} "
                        f"({100*self.stats['llm_changed_decision']/self.stats['llm_verified']:.1f}% of LLM calls)")
+            logger.info(f"⚠️ Schemas preserved from TEXT: {self.stats['schema_preserved_from_text']} "
+                       f"({100*self.stats['schema_preserved_from_text']/self.stats['llm_verified']:.1f}% of LLM calls)")
         logger.info("="*80)

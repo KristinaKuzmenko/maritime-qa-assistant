@@ -318,9 +318,9 @@ class DocumentProcessor:
         # For schemas: analyze only LLM summary (caption/title not informative)
         # For tables: analyze table content (text_context = CSV content)
         if content_type == "schema":
-            combined_text = llm_summary.lower()
+            combined_text = (llm_summary or "").lower()
         else:  # table
-            combined_text = text_context.lower()
+            combined_text = (text_context or "").lower()
         
         # Base type tag
         if content_type == "schema":
@@ -811,6 +811,26 @@ class DocumentProcessor:
                         schema_idx=schema_counter,  # Unique index for this page
                     )
                     schema_counter += 1  # Increment for next schema on this page
+                    
+                    # Check if dual extraction is needed (schema + text from same bbox)
+                    if region.extract_text_also:
+                        logger.info(
+                            f"🔄 Page {page_num + 1}: Dual extraction - extracting text from SCHEMA bbox "
+                            f"(YOLO confident SCHEMA, but LLM detected text content)"
+                        )
+                        # Extract text from schema bbox
+                        text_from_schema = page.get_text("text", clip=fitz.Rect(
+                            region.bbox.x0, region.bbox.y0, 
+                            region.bbox.x1, region.bbox.y1
+                        )).strip()
+                        
+                        if text_from_schema and len(text_from_schema) > 20:
+                            # Add to page_text for section processing
+                            page_text = page_text + "\n\n" + text_from_schema
+                            logger.info(
+                                f"✅ Extracted {len(text_from_schema)} chars of text from SCHEMA region "
+                                f"(will be processed as text chunks)"
+                            )
                     
                     # Collect based on result type
                     if result['type'] == 'hybrid':
@@ -2217,7 +2237,8 @@ The visual elements are processed separately and linked to this section for orga
             return "note"
         if re.search(r"\|.*\|.*\|", content):
             return "table"
-        if re.search(r"^\s*[\d•·]\s+", content, re.MULTILINE):
+        # Match numbered lists (1. Item or 1 Item) or bullet lists (• Item)
+        if re.search(r"^\s*(\d+\.?|[•·])\s+", content, re.MULTILINE):
             return "list"
         
         return "text"

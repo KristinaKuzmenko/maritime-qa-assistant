@@ -294,18 +294,18 @@ class SchemaExtractor:
                 context['llm_summary'] = llm_summary
                 logger.info(f"✅ LLM generated description for schema")
             else:
-                # LLM couldn't describe (classified as NOT_SCHEMA) - use fallback
+                # LLM failed (rate limit, API error, or NOT_SCHEMA) - use fallback
                 fallback_desc = self._build_fallback_description(context)
                 context['llm_summary'] = fallback_desc
-                logger.warning(
-                    f"⚠️ LLM returned NOT_SCHEMA, using fallback description: "
-                    f"caption='{context.get('caption', 'N/A')}'"
+                logger.info(
+                    f"ℹ️ Using fallback description for schema "
+                    f"(caption: '{context.get('caption', 'N/A')[:50]}...')"
                 )
         else:
             # LLM disabled - use fallback description
             fallback_desc = self._build_fallback_description(context)
             context['llm_summary'] = fallback_desc
-            logger.warning("⚠️ LLM summary disabled - using fallback description")
+            logger.debug("LLM summary disabled - using fallback description")
         # Create thumbnail
         thumb_png = self._make_thumbnail(crop_png, self.thumbnail_size)
         
@@ -338,7 +338,7 @@ class SchemaExtractor:
             "thumbnail_path": thumb_path,
             "confidence": region.confidence,
             "text_context": self._build_rich_context(context),  # Enhanced context with LLM summary
-            "llm_summary": llm_summary or "",  # Store separately for Neo4j
+            "llm_summary": context.get('llm_summary', ""),  # Use from context with simple fallback
             "section_id": section_id,
             "metadata": {
                 "nearby_paragraphs": context['nearby_paragraphs'],
@@ -713,20 +713,22 @@ class SchemaExtractor:
     
     def _distance_to_bbox(self, rect: fitz.Rect, bbox: BBox) -> float:
         """
-        Calculate distance from rect to bbox (center-to-center).
+        Calculate vertical distance (gap) from rect to bbox.
         
         :param rect: fitz.Rect object
         :param bbox: BBox object
-        :return: Distance in pixels
+        :return: Vertical gap distance in pixels (0 if overlapping)
         """
-        rect_center_x = (rect.x0 + rect.x1) / 2
-        rect_center_y = (rect.y0 + rect.y1) / 2
-        
-        bbox_center_x = (bbox.x0 + bbox.x1) / 2
-        bbox_center_y = (bbox.y0 + bbox.y1) / 2
-        
-        return ((rect_center_x - bbox_center_x)**2 +
-                (rect_center_y - bbox_center_y)**2)**0.5
+        # Calculate vertical gap
+        if rect.y1 < bbox.y0:
+            # rect is above bbox
+            return bbox.y0 - rect.y1
+        elif rect.y0 > bbox.y1:
+            # rect is below bbox
+            return rect.y0 - bbox.y1
+        else:
+            # Overlapping or adjacent
+            return 0
     
     def _is_noise_text(self, text: str) -> bool:
         """
@@ -751,8 +753,7 @@ class SchemaExtractor:
     def _build_fallback_description(self, context: Dict[str, Any]) -> str:
         """
         Build fallback description when LLM cannot analyze image.
-        Since text_context already contains caption and surrounding text,
-        this just provides a minimal valid description.
+        Uses caption or nearby paragraphs to provide context.
         
         :param context: Context dict with caption, nearby_paragraphs, etc.
         :return: Fallback description string
@@ -761,6 +762,13 @@ class SchemaExtractor:
         caption = context.get('caption', '').strip()
         if caption and len(caption) > 10:
             return f"Technical diagram: {caption}"
+        
+        # Try nearby paragraphs if caption unavailable
+        paragraphs = context.get('nearby_paragraphs', [])
+        if paragraphs:
+            # Use first paragraph (truncated) as description
+            first_para = paragraphs[0][:200]  # Limit length
+            return f"Technical diagram: {first_para}"
         
         # Otherwise generic description (text_context will have the details)
         return "Technical diagram from maritime manual"
@@ -776,12 +784,19 @@ class SchemaExtractor:
         if not self.enable_llm_summary:
             return None
         
+        # Check if LLM service is available
+        if not self.llm_service:
+            logger.warning("⚠️ LLM service not initialized - cannot generate schema summary")
+            return None
+        
         import asyncio
         from openai import RateLimitError
         
         # Retry configuration for rate limits
-        max_retries = 3
-        retry_delay = 1.0  # Start with 1 second
+        # More generous for rate limits - OpenAI may need 30-60 seconds
+        max_retries = 5  # Increased from 3 to 5
+        retry_delay = 2.0  # Increased from 1.0 to 2.0 seconds
+        max_wait_time = 60.0  # Cap individual wait at 60 seconds
         
         for attempt in range(max_retries):
             try:
@@ -825,8 +840,20 @@ class SchemaExtractor:
                 # Add existing context if available
                 if context.get('caption'):
                     prompt_parts.append(f"\n📋 CAPTION: {context['caption']}")
+                
+                # Add nearby paragraphs (first 1-2 paragraphs, up to 600 chars total)
                 if context.get('nearby_paragraphs'):
-                    prompt_parts.append(f"\n📄 CONTEXT: {context['nearby_paragraphs'][0][:300]}...")
+                    # Take first 2 paragraphs if available
+                    paragraphs_to_use = context['nearby_paragraphs'][:2]
+                    combined_paragraphs = ' '.join(paragraphs_to_use)
+                    # Limit to 600 chars to avoid token overflow
+                    if len(combined_paragraphs) > 600:
+                        combined_paragraphs = combined_paragraphs[:600] + '...'
+                    prompt_parts.append(f"\n📄 CONTEXT: {combined_paragraphs}")
+                # Fallback: if no paragraphs, use surrounding text
+                elif context.get('surrounding_text'):
+                    surrounding = context['surrounding_text'][:500]  # Up to 500 chars
+                    prompt_parts.append(f"\n📄 SURROUNDING TEXT: {surrounding}")
                 
                 prompt = "\n".join(prompt_parts)
                 
@@ -877,15 +904,28 @@ class SchemaExtractor:
                 
             except RateLimitError as e:
                 if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(f"⏳ Rate limit hit, retrying in {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                    # Exponential backoff with cap
+                    wait_time = min(retry_delay * (2 ** attempt), max_wait_time)
+                    total_waited = sum(min(retry_delay * (2 ** i), max_wait_time) for i in range(attempt + 1))
+                    logger.warning(
+                        f"⏳ Rate limit hit, retrying in {wait_time:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries}, total waited: {total_waited:.1f}s)"
+                    )
                     await asyncio.sleep(wait_time)
                     continue
                 else:
-                    logger.error(f"❌ Rate limit exceeded after {max_retries} retries: {e}")
+                    # After all retries exhausted - fallback will be used in caller
+                    logger.error(
+                        f"❌ Rate limit exceeded after {max_retries} retries: {e}. "
+                        f"Fallback description will be used for this schema."
+                    )
                     return None
             except Exception as e:
-                logger.warning(f"Failed to generate LLM summary: {e}")
+                # Non-rate-limit errors - fallback will be used in caller
+                logger.warning(
+                    f"⚠️ LLM API error: {e}. "
+                    f"Fallback description will be used for this schema."
+                )
                 return None
         
         return None  # All retries failed
@@ -905,26 +945,26 @@ class SchemaExtractor:
             
             # Extract diagram TYPE tag for semantic indexing
             import re
-            match = re.search(r"TYPE:(\w+)", context['llm_summary'])
+            match = re.search(r"TYPE:\s*(\w+)", context['llm_summary'])
             if match:
                 text_parts.append(f"DiagramType: {match.group(1)}")
         
         # 1. Caption
-        if context['caption']:
+        if context.get('caption'):
             text_parts.append(f"Caption: {context['caption']}")
         
         # 2. Nearby paragraphs
-        if context['nearby_paragraphs']:
+        if context.get('nearby_paragraphs'):
             para_text = "\n\n".join(context['nearby_paragraphs'])
             text_parts.append(f"Context:\n{para_text}")
         
         # 3. References
-        if context['references']:
+        if context.get('references'):
             ref_text = " ".join(context['references'])
             text_parts.append(f"References: {ref_text}")
         
         # 4. Surrounding text (fallback)
-        if not context['nearby_paragraphs'] and context['surrounding_text']:
+        if not context.get('nearby_paragraphs') and context.get('surrounding_text'):
             text_parts.append(f"Surrounding text: {context['surrounding_text'][:500]}")
         
         # 5. Domain tags (semantic context)

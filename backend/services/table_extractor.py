@@ -394,8 +394,13 @@ class TableExtractor:
         # Check 4: Cell length - avoid paragraphs but allow descriptions
         if non_empty:
             avg_cell_length = sum(len(c or "") for c in non_empty) / len(non_empty)
-            if avg_cell_length > 150:
-                return False  # Cells too long - probably paragraphs
+            max_cell_length = max(len(c or "") for c in non_empty)
+            
+            if avg_cell_length > 200:
+                return False  # Cells too long on average - probably paragraphs
+            
+            if max_cell_length > 350:
+                return False  # Individual cell too long - probably paragraph text
 
         # Check 5: Must have structured data pattern (numbers, short strings)
         # Schemas often have very few actual text cells

@@ -48,12 +48,23 @@ class VectorService:
             self.client = client
         else:
             if getattr(settings, "qdrant_api_key", None):
-                self.client = QdrantClient(
-                    host=settings.qdrant_host,
-                    port=settings.qdrant_port,
-                    api_key=settings.qdrant_api_key,
-                )
+                # Qdrant Cloud: use url parameter with https://
+                use_https = getattr(settings, "qdrant_use_https", True)
+                if use_https:
+                    qdrant_url = f"https://{settings.qdrant_host}:{settings.qdrant_port}"
+                    self.client = QdrantClient(
+                        url=qdrant_url,
+                        api_key=settings.qdrant_api_key,
+                    )
+                else:
+                    # Self-hosted with API key
+                    self.client = QdrantClient(
+                        host=settings.qdrant_host,
+                        port=settings.qdrant_port,
+                        api_key=settings.qdrant_api_key,
+                    )
             else:
+                # Local/self-hosted without API key
                 self.client = QdrantClient(
                     host=settings.qdrant_host,
                     port=settings.qdrant_port,
@@ -207,6 +218,7 @@ class VectorService:
         schema_id: str,
         text: str,
         doc_id: str,
+        doc_title: str,
         page: int,
         caption: Optional[str] = None,
         system_ids: Optional[List[str]] = None,
@@ -222,6 +234,7 @@ class VectorService:
         :param schema_id: Schema ID from Neo4j
         :param text: Combined text (caption + context)
         :param doc_id: Document ID
+        :param doc_title: Document title
         :param page: Page number
         :param caption: Schema caption
         :param system_ids: Related system IDs
@@ -248,6 +261,7 @@ class VectorService:
                 "type": "schema",
                 "schema_id": schema_id,
                 "doc_id": doc_id,
+                "doc_title": doc_title,
                 "page": page,
                 "caption": caption or "",
                 "system_ids": system_ids or [],
@@ -278,6 +292,7 @@ class VectorService:
         chunk_index: int,
         text: str,
         doc_id: str,
+        doc_title: str,
         page: int,
         table_title: Optional[str] = None,
         table_caption: Optional[str] = None,
@@ -297,6 +312,7 @@ class VectorService:
         :param chunk_index: Index of this chunk (0-based)
         :param text: Text content of this chunk (linearized table rows)
         :param doc_id: Document ID
+        :param doc_title: Document title
         :param page: Page number
         :param table_title: Parent table title
         :param table_caption: Parent table caption
@@ -328,6 +344,7 @@ class VectorService:
             "chunk_index": chunk_index,
             "total_chunks": total_chunks or 1,
             "doc_id": doc_id,
+            "doc_title": doc_title,
             "page": page,
             "table_title": table_title or "",
             "table_caption": table_caption or "",
@@ -380,7 +397,7 @@ class VectorService:
         :param score_threshold: Minimum similarity score
         :return: List of matching chunks with metadata
         """
-        logger.error("🚀🚀🚀 search_text called - CODE UPDATED! 🚀🚀🚀")
+        logger.info(f"Searching text chunks: query='{query[:50]}...', limit={limit}, doc_id={doc_id}")
         query_embedding = await self._embed(query)
 
         # Build filter

@@ -554,9 +554,9 @@ class SmartRegionProcessor:
                     "title": table_data['title'],
                     "caption": table_data.get('caption', ''),
                     "file_path": table_data['file_path'],
-                    "thumbnail_path": table_data['thumbnail_path'],
+                    "thumbnail_path": table_data.get('thumbnail_path', ''),
                     "csv_path": table_data['csv_path'],
-                    "bbox": table_data['bbox'],
+                    "bbox": table_data.get('bbox'),
                     "rows": table_data['rows'],
                     "cols": table_data['cols'],
                     "chunk_index": idx,
@@ -589,11 +589,11 @@ class SmartRegionProcessor:
             "page_number": schema_data['page_number'],
             "content": schema_data.get('text_context', ''),  # Enhanced context (includes LLM summary)
             "metadata": {
-                "title": schema_data['title'],
+                "title": schema_data.get('title', ''),
                 "caption": schema_data.get('caption', ''),
-                "file_path": schema_data['file_path'],
-                "thumbnail_path": schema_data['thumbnail_path'],
-                "bbox": schema_data['bbox'],
+                "file_path": schema_data.get('file_path', ''),
+                "thumbnail_path": schema_data.get('thumbnail_path', ''),
+                "bbox": schema_data.get('bbox'),
                 "confidence": schema_data.get('confidence', 0.0),
                 "section_id": section_id or schema_data.get('section_id'),
                 "llm_summary": schema_data.get('llm_summary', ''),  # Preserve LLM summary

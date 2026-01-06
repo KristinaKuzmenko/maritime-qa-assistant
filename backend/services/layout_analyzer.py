@@ -71,6 +71,7 @@ class Region:
     page_number: int  # zero-based
     caption_text: Optional[str] = None  # Caption found by YOLO or reclassifier
     yolo_class_id: Optional[int] = None  # Original YOLO class (0=Caption, 6=Picture, 8=Table, etc.)
+    extract_text_also: bool = False  # Dual extraction: extract as schema AND extract text from bbox
 
 
 class LayoutAnalyzer:
@@ -267,6 +268,9 @@ class LayoutAnalyzer:
                     yolo_class_id=class_id,  # Save original YOLO class
                 ))
             
+            # Deduplicate overlapping regions (same object detected as multiple classes)
+            regions = self._deduplicate_regions(regions)
+            
             # Log summary
             type_counts = {}
             for r in regions:
@@ -285,6 +289,55 @@ class LayoutAnalyzer:
             )
         
         return regions
+    
+    def _deduplicate_regions(self, regions: List[Region]) -> List[Region]:
+        """
+        Remove duplicate overlapping regions (same bbox detected as multiple classes).
+        Prioritize SCHEMA/TABLE over TEXT when IoU > 0.8.
+        """
+        if len(regions) <= 1:
+            return regions
+        
+        # Type priority: SCHEMA > TABLE > TEXT
+        type_priority = {
+            RegionType.SCHEMA: 3,
+            RegionType.TABLE: 2,
+            RegionType.TEXT: 1,
+        }
+        
+        # Sort by type priority first, then by confidence
+        sorted_regions = sorted(
+            regions, 
+            key=lambda r: (type_priority.get(r.region_type, 0), r.confidence), 
+            reverse=True
+        )
+        
+        deduplicated = []
+        for region in sorted_regions:
+            # Check if this region significantly overlaps with any already kept region
+            is_duplicate = False
+            for kept_region in deduplicated:
+                iou = region.bbox._calculate_iou(kept_region.bbox)
+                if iou > 0.8:  # High IoU = likely duplicate
+                    is_duplicate = True
+                    logger.debug(
+                        f"Page {region.page_number + 1}: Removing duplicate region - "
+                        f"{region.region_type.value} (conf={region.confidence:.3f}) "
+                        f"overlaps with {kept_region.region_type.value} (conf={kept_region.confidence:.3f}), "
+                        f"IoU={iou:.3f}"
+                    )
+                    break
+            
+            if not is_duplicate:
+                deduplicated.append(region)
+        
+        if len(deduplicated) < len(regions):
+            logger.info(
+                f"Page {regions[0].page_number + 1}: Deduplicated {len(regions)} → {len(deduplicated)} regions "
+                f"(removed {len(regions) - len(deduplicated)} overlapping duplicates)"
+            )
+        
+        return deduplicated
     
     def _is_schema_heavy_page(self, page: fitz.Page) -> bool:
         """
