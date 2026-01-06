@@ -119,6 +119,14 @@ async def process_document_background(
         }
 
         logger.info(f"✅ Document {doc_id} processed successfully")
+        
+        # Invalidate entity cache so it reloads on next query
+        try:
+            from workflow import tool_ctx
+            tool_ctx.entities_loaded = False
+            logger.info("♻️ Entity cache invalidated - will reload on next query")
+        except Exception as e:
+            logger.warning(f"Failed to invalidate entity cache: {e}")
 
     except Exception as e:
         logger.error(f"❌ Document processing failed for {doc_id}: {e}", exc_info=True)
@@ -162,7 +170,7 @@ async def upload_document(
         )
     
     # Validate file type
-    if not file.filename.endswith('.pdf'):
+    if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are allowed"

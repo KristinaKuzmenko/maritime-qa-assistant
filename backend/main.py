@@ -16,6 +16,7 @@ import asyncio
 from pathlib import Path
 import uuid
 import shutil
+import os
 
 from qdrant_client import QdrantClient
 from neo4j import AsyncGraphDatabase
@@ -28,17 +29,60 @@ from services.storage_service import StorageService
 from services.graph_service import Neo4jClient
 from services.vector_service import VectorService
 from services.embedding_service import EmbeddingService
-from workflow import build_qa_graph
+from workflow import build_qa_graph, preload_entities
 
 from routes import health, documents, chat
 from core.config import settings
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+# Configure logging with file output
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+# Create formatters
+detailed_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+simple_formatter = logging.Formatter(
+    '%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S'
+)
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Only add handlers if not already present (avoid duplicates on reload)
+if not root_logger.handlers:
+    # Console handler (simple format)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(simple_formatter)
+
+    # File handler for all logs (detailed format)
+    file_handler = logging.FileHandler(log_dir / "maritime_api.log", encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(detailed_formatter)
+
+    # File handler for document processing only (very detailed)
+    processing_handler = logging.FileHandler(log_dir / "document_processing.log", encoding='utf-8')
+    processing_handler.setLevel(logging.DEBUG)
+    processing_handler.setFormatter(detailed_formatter)
+    processing_handler.addFilter(lambda record: any(name in record.name for name in [
+        'document_processor', 'schema_extractor', 'table_extractor', 
+        'layout_analyzer', 'region_classifier', 'smart_region_processor',
+        'embedding_service', 'graph_service', 'vector_service'
+    ]))
+
+    # Add handlers
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(processing_handler)
+else:
+    # Suppress duplicate initialization logs from reloader
+    os.environ['LOGGING_CONFIGURED'] = '1'
+
 logger = logging.getLogger(__name__)
 
 # Global service instances
@@ -71,11 +115,16 @@ async def lifespan(app: FastAPI):
         # 1. Storage Service
         logger.info("Initializing storage service...")
         storage_service = StorageService(
-            storage_type="local",
-            local_storage_path="./data",
-            base_url="/data"
+            storage_type=settings.storage_type,
+            local_storage_path=settings.local_storage_path,
+            s3_bucket_name=settings.s3_bucket_name,
+            s3_prefix=settings.s3_prefix,  # e.g., 'data' if files are in data/schemas/...
+            aws_region=settings.aws_region,
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            base_url="/data" if settings.storage_type == "local" else None
         )
-        logger.info("✅ Storage service initialized")
+        logger.info(f"✅ Storage service initialized ({settings.storage_type})")
         
         # 2. Embedding Service
         logger.info("Initializing embedding service...")
@@ -121,10 +170,26 @@ async def lifespan(app: FastAPI):
             vector_service.initialize_collections()
             logger.info("✅ Qdrant initialized")
 
-            qdrant_client = QdrantClient(
-                host=settings.qdrant_host,
-                port=settings.qdrant_port,
-            )
+            # Initialize Qdrant client (reuse logic from VectorService)
+            if settings.qdrant_api_key:
+                use_https = getattr(settings, "qdrant_use_https", True)
+                if use_https:
+                    qdrant_url = f"https://{settings.qdrant_host}:{settings.qdrant_port}"
+                    qdrant_client = QdrantClient(
+                        url=qdrant_url,
+                        api_key=settings.qdrant_api_key,
+                    )
+                else:
+                    qdrant_client = QdrantClient(
+                        host=settings.qdrant_host,
+                        port=settings.qdrant_port,
+                        api_key=settings.qdrant_api_key,
+                    )
+            else:
+                qdrant_client = QdrantClient(
+                    host=settings.qdrant_host,
+                    port=settings.qdrant_port,
+                )
         except Exception as e:
             logger.error(f"❌ Qdrant connection failed: {e}")
             logger.warning("⚠️  API will start without Qdrant")
@@ -137,10 +202,28 @@ async def lifespan(app: FastAPI):
             if neo4j_driver and qdrant_client:
                 logger.info("Initializing Q&A workflow...")
                 try:
+                    # ⚡ OPTIMIZATION: Preload entities at startup (not on first query)
+                    from workflow import preload_entities, tool_ctx
+                    
+                    # Set driver and graph_client in tool_ctx BEFORE calling preload_entities
+                    tool_ctx.neo4j_driver = neo4j_driver
+                    tool_ctx.graph_client = graph_client  # Neo4jClient for high-level operations
+                    
+                    logger.info("⚡ Preloading entities from Neo4j...")
+                    known_entities = await preload_entities(neo4j_driver)
+                    logger.info(f"📊 Received {len(known_entities)} entities from preload_entities")
+                    tool_ctx.known_entities = known_entities
+                    tool_ctx.entities_loaded = True
+                    logger.info(f"✅ Set tool_ctx: entities_loaded={tool_ctx.entities_loaded}, count={len(tool_ctx.known_entities)}")
+                    logger.info(f"✅ Preloaded {len(known_entities)} entities")
+                    
                     qa_graph = build_qa_graph(
                         qdrant_client=qdrant_client,
                         neo4j_driver=neo4j_driver,
                         vector_service=vector_service,
+                        neo4j_uri=settings.neo4j_uri,
+                        neo4j_auth=(settings.neo4j_user, settings.neo4j_password),
+                        graph_client=graph_client,
                     )
                     logger.info("✅ Q&A workflow initialized")
                     
@@ -154,8 +237,10 @@ async def lifespan(app: FastAPI):
         if graph_client and vector_service:
             logger.info("Initializing document processors...")
             try:
+                # Use path relative to this file (works locally and in Docker)
+                model_path = Path(__file__).parent / "models" / "yolov12s-doclaynet.pt"
                 layout_analyzer = LayoutAnalyzer(
-                    model_path="backend/models/yolov10s_best.pt",  # Path from project root
+                    model_path=str(model_path),
                     confidence_threshold=0.4,
                 )
 
@@ -164,6 +249,7 @@ async def lifespan(app: FastAPI):
                     layout_analyzer=layout_analyzer,
                     llm_service=llm_client,
                     enable_llm_summary=True,
+                    vision_detail=settings.vision_detail_schemas,  # Cost optimization
                 )
                 
                 table_extractor = TableExtractor(
@@ -203,6 +289,7 @@ async def lifespan(app: FastAPI):
         chat_routes.graph_client = graph_client
         chat_routes.qdrant_client = qdrant_client
         chat_routes.neo4j_driver = neo4j_driver
+        chat_routes.storage_service = storage_service  # For URL transformation
 
 
         health_routes.graph_client = graph_client
@@ -291,30 +378,34 @@ app.include_router(documents.router, prefix="/documents", tags=["Documents"])
 app.include_router(chat.router, prefix="/qa", tags=["Q&A"])
 
 
-# Static Files - Serve schemas, tables, and other media
-BASE_DIR = Path(__file__).parent.parent  
-DATA_DIR = BASE_DIR / "data"
-
-# Ensure directories exist
-(DATA_DIR / "schemas").mkdir(parents=True, exist_ok=True)
-(DATA_DIR / "tables").mkdir(parents=True, exist_ok=True)
-
-# Mount static file directories with absolute paths
-app.mount(
-    "/schemas", 
-    StaticFiles(directory=str(DATA_DIR / "schemas")), 
-    name="schemas"
-)
-
-app.mount(
-    "/tables", 
-    StaticFiles(directory=str(DATA_DIR / "tables")), 
-    name="tables"
-)
-
-logger.info(f"📁 Static files mounted:")
-logger.info(f"   /schemas -> {DATA_DIR / 'schemas'}")
-logger.info(f"   /tables -> {DATA_DIR / 'tables'}")
+# Static Files - Only mount for local storage (S3 uses direct links)
+if settings.storage_type == "local" and not os.environ.get('LOGGING_CONFIGURED'):
+    BASE_DIR = Path(__file__).parent.parent  
+    DATA_DIR = BASE_DIR / "data"
+    
+    # Ensure directories exist
+    (DATA_DIR / "schemas").mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "tables").mkdir(parents=True, exist_ok=True)
+    
+    # Mount static file directories with absolute paths
+    app.mount(
+        "/schemas", 
+        StaticFiles(directory=str(DATA_DIR / "schemas")), 
+        name="schemas"
+    )
+    
+    app.mount(
+        "/tables", 
+        StaticFiles(directory=str(DATA_DIR / "tables")), 
+        name="tables"
+    )
+    
+    logger.info(f"📁 Static files mounted (local storage):")
+    logger.info(f"   /schemas -> {DATA_DIR / 'schemas'}")
+    logger.info(f"   /tables -> {DATA_DIR / 'tables'}")
+elif settings.storage_type == "s3" and not os.environ.get('LOGGING_CONFIGURED'):
+    logger.info(f"📁 Storage configured for S3 (bucket: {settings.s3_bucket_name})")
+    logger.info(f"   Direct S3 links will be used for schemas and tables")
 
 
 # Root endpoint

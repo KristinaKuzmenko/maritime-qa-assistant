@@ -8,8 +8,13 @@ from typing import List, Dict, Optional, Any
 import logging
 
 from middleware.rate_limiter import role_rate_limit
+from core.prompt_injection_filter import PromptInjectionFilter
+from helpers.response_transformer import transform_response_urls_sync
 
 logger = logging.getLogger(__name__)
+
+# Initialize prompt injection filter
+injection_filter = PromptInjectionFilter(strict_mode=True)
 
 router = APIRouter()
 
@@ -17,6 +22,7 @@ qa_graph = None
 graph_client = None
 qdrant_client = None
 neo4j_driver = None
+storage_service = None  # Added for URL transformation
 
 
 class ChatMessage(BaseModel):
@@ -64,6 +70,31 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             detail="Q&A service not available. Check Neo4j and Qdrant connections."
         )
     
+    # 🛡️ SECURITY: Check for prompt injection attempts
+    injection_check = injection_filter.check_query(question_req.question)
+    
+    if not injection_check.is_safe:
+        logger.warning(
+            f"🚨 Prompt injection detected: {injection_check.explanation}",
+            extra={
+                "user_id": question_req.user_id,
+                "risk_level": injection_check.risk_level,
+                "patterns": injection_check.detected_patterns,
+                "query_preview": question_req.question[:100]
+            }
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Please ask a question about maritime technical documentation. "
+                   "Your query contains content that cannot be processed."
+        )
+    
+    # Use sanitized query for processing
+    safe_question = injection_check.sanitized_query
+    logger.info(
+        f"✅ Query passed injection filter (risk: {injection_check.risk_level})"
+    )
+    
     try:
         # Prepare initial state for agentic workflow
         state = {
@@ -75,16 +106,19 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             
             # These will be filled by workflow
             "query_intent": "text",  # Default
+            "tool_names": [],
             "anchor_sections": [],
             "messages": [],
-            "qdrant_results": {"text": [], "tables": [], "schemas": []},
+            "search_results": {"text": [], "tables": [], "schemas": []},
             "neo4j_results": [],
+            "entity_results": None,
             "enriched_context": [],
+            "retrieval_attempt": 0,  # Adaptive retry: 0 = first attempt, max 1 retry
             "answer": {},
         }
         
         logger.info(
-            f"Processing question: {question_req.question} "
+            f"Processing question: {safe_question} "
             f"(owner={question_req.owner}, doc_ids={question_req.doc_ids})"
         )
         
@@ -114,10 +148,10 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             ],
             
             # Retrieval statistics
-            "qdrant_results": {
-                "text": len(result.get("qdrant_results", {}).get("text", [])),
-                "tables": len(result.get("qdrant_results", {}).get("tables", [])),
-                "schemas": len(result.get("qdrant_results", {}).get("schemas", [])),
+            "search_results": {
+                "text": len(result.get("search_results", {}).get("text", [])),
+                "tables": len(result.get("search_results", {}).get("tables", [])),
+                "schemas": len(result.get("search_results", {}).get("schemas", [])),
             },
             "neo4j_results": len(result.get("neo4j_results", [])),
             
@@ -145,12 +179,42 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             metadata=metadata
         )
         
+        # 🔄 Transform file paths to accessible URLs for S3 storage
+        if storage_service:
+            response_dict = response.dict()
+            
+            # Log BEFORE transformation
+            if response_dict.get("figures"):
+                logger.info(f"📥 BEFORE transform: First figure URL = {response_dict['figures'][0].get('url')}")
+            
+            response_dict = transform_response_urls_sync(
+                response_dict,
+                storage_service,
+                expiration=3600  # 1 hour
+            )
+            
+            # Log AFTER transformation
+            if response_dict.get("figures"):
+                logger.info(f"📤 AFTER transform: First figure URL = {response_dict['figures'][0].get('url')[:150]}...")
+            
+            response = AnswerResponse(**response_dict)
+        
         logger.info(
             f"✅ Answer generated: intent={metadata['query_intent']}, "
             f"tools={metadata['tools_used']}, "
             f"anchors={metadata['anchor_sections']}, "
             f"context={metadata['final_context']}"
         )
+        
+        # Log what will be sent to client
+        if hasattr(response, 'figures') and response.figures:
+            logger.info(f"📡 Sending to client: {len(response.figures)} figures (type={type(response.figures)})")
+            if isinstance(response.figures, list) and len(response.figures) > 0:
+                first_fig = response.figures[0]
+                if isinstance(first_fig, dict):
+                    logger.info(f"   First figure URL: {first_fig.get('url', 'N/A')[:120]}...")
+                else:
+                    logger.info(f"   First figure type: {type(first_fig)}, has url: {hasattr(first_fig, 'url')}")
         
         return response
         
@@ -181,7 +245,7 @@ def _extract_tools_used(messages: List) -> List[str]:
 
 
 @router.post("/debug")
-@role_rate_limit("chat")
+@role_rate_limit("qa")
 async def debug_workflow(request: Request, question_req: QuestionRequest):
     """
     UPDATED debug endpoint for agentic workflow.
@@ -218,9 +282,12 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
             "query_intent": "text",
             "anchor_sections": [],
             "messages": [],
-            "qdrant_results": {"text": [], "tables": [], "schemas": []},
+            "tool_names": [],
+            "search_results": {"text": [], "tables": [], "schemas": []},
             "neo4j_results": [],
+            "entity_results": None,
             "enriched_context": [],
+            "retrieval_attempt": 0,
             "answer": {},
         }
         
@@ -243,12 +310,12 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
             
             # Step 3: Tool Execution
             "step_3_tool_execution": {
-                "qdrant_text": len(result.get("qdrant_results", {}).get("text", [])),
-                "qdrant_tables": len(result.get("qdrant_results", {}).get("tables", [])),
-                "qdrant_schemas": len(result.get("qdrant_results", {}).get("schemas", [])),
+                "search_text": len(result.get("search_results", {}).get("text", [])),
+                "search_tables": len(result.get("search_results", {}).get("tables", [])),
+                "search_schemas": len(result.get("search_results", {}).get("schemas", [])),
                 "neo4j_records": len(result.get("neo4j_results", [])),
                 "samples": {
-                    "qdrant_text": result.get("qdrant_results", {}).get("text", [])[:2],
+                    "search_text": result.get("search_results", {}).get("text", [])[:2],
                     "neo4j": result.get("neo4j_results", [])[:2],
                 }
             },
@@ -282,6 +349,9 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
                 "tables_count": len(result.get("answer", {}).get("tables", [])),
                 "figures_count": len(result.get("answer", {}).get("figures", [])),
             },
+            
+            # Full answer for display (compatible with normal response)
+            "answer": result.get("answer", {}),
         }
         
     except Exception as e:
@@ -290,7 +360,7 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
 
 
 @router.post("/analyze")
-@role_rate_limit("chat")
+@role_rate_limit("qa")
 async def analyze_query(request: Request, question_req: QuestionRequest):
     """
     Analyze query intent without running full workflow.
@@ -302,8 +372,8 @@ async def analyze_query(request: Request, question_req: QuestionRequest):
     """
     
     try:
-        # Import analysis function from agentic workflow
-        from workflow_agentic import node_analyze_question
+        # Import analysis function from workflow
+        from workflow import node_analyze_and_route
         
         state = {
             "question": question_req.question,
@@ -314,14 +384,17 @@ async def analyze_query(request: Request, question_req: QuestionRequest):
             "query_intent": "text",
             "anchor_sections": [],
             "messages": [],
-            "qdrant_results": {"text": [], "tables": [], "schemas": []},
+            "tool_names": [],
+            "search_results": {"text": [], "tables": [], "schemas": []},
             "neo4j_results": [],
+            "entity_results": None,
             "enriched_context": [],
+            "retrieval_attempt": 0,
             "answer": {},
         }
         
         # Run only analysis step
-        analyzed = node_analyze_question(state)
+        analyzed = node_analyze_and_route(state)
         
         return {
             "question": question_req.question,
