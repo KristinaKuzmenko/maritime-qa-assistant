@@ -4,24 +4,31 @@ Admin panel page.
 
 import streamlit as st
 import pandas as pd
-from auth_config import credentials, add_user, remove_user, list_users, change_password
-from utils.api_client import api_client
-from utils.helpers import get_request_headers, display_error
+
+from frontend.auth_config import (
+    credentials,
+    add_user,
+    remove_user,
+    list_users,
+    change_password,
+)
+from frontend.utils.api_client import api_client
+from frontend.utils.helpers import get_request_headers, display_error
 
 
 def render():
     """Render admin panel."""
-    st.title("⚙️ Admin Panel")
+    st.title("Admin")
     st.caption("System administration and user management")
     
     # Check if user is admin
     role = st.session_state.get('role', 'user')
     if role != 'admin':
-        st.error("⛔ Access Denied: Admin privileges required")
+        st.error("Access denied: admin privileges required")
         return
     
     # Tabs
-    tab1, tab2, tab3 = st.tabs(["👥 Users", "📊 System Stats", "🔧 Settings"])
+    tab1, tab2, tab3 = st.tabs(["Users", "System stats", "Settings"])
     
     with tab1:
         render_user_management()
@@ -45,7 +52,7 @@ def render_user_management():
     if users_data:
         df = pd.DataFrame(users_data)
         df.columns = ["Username", "Name", "Role", "Email"]
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.info("No users found")
     
@@ -66,7 +73,7 @@ def render_user_management():
     
     # Add new user
     st.markdown("---")
-    st.subheader("➕ Add New User")
+    st.subheader("Add new user")
     
     with st.form("add_user_form"):
         col1, col2 = st.columns(2)
@@ -82,7 +89,7 @@ def render_user_management():
         new_password = st.text_input("Password *", type="password")
         confirm_password = st.text_input("Confirm Password *", type="password")
         
-        submitted = st.form_submit_button("Add User", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Add user", type="primary", width="stretch")
         
         if submitted:
             if not all([new_username, new_name, new_email, new_password]):
@@ -93,7 +100,7 @@ def render_user_management():
                 st.error("Password must be at least 6 characters")
             else:
                 result = add_user(new_username, new_password, new_name, new_role, new_email)
-                if "✅" in result:
+                if result.startswith("OK:"):
                     st.success(result)
                     st.rerun()
                 else:
@@ -101,7 +108,7 @@ def render_user_management():
     
     # Remove user
     st.markdown("---")
-    st.subheader("🗑️ Remove User")
+    st.subheader("Remove user")
     
     current_username = st.session_state.get("username")
     available_users = [u["username"] for u in users_data if u["username"] != current_username]
@@ -113,16 +120,16 @@ def render_user_management():
                 options=available_users
             )
             
-            confirm_remove = st.checkbox("⚠️ I confirm I want to remove this user")
+            confirm_remove = st.checkbox("I confirm I want to remove this user")
             
-            submitted = st.form_submit_button("Remove User", type="secondary", use_container_width=True)
+            submitted = st.form_submit_button("Remove user", type="secondary", width="stretch")
             
             if submitted:
                 if not confirm_remove:
                     st.warning("Please confirm removal by checking the box")
                 else:
                     result = remove_user(user_to_remove)
-                    if "✅" in result:
+                    if result.startswith("OK:"):
                         st.success(result)
                         st.rerun()
                     else:
@@ -132,7 +139,7 @@ def render_user_management():
     
     # Change password
     st.markdown("---")
-    st.subheader("🔐 Change Password")
+    st.subheader("Change password")
     
     with st.form("change_password_form"):
         user_for_password = st.selectbox(
@@ -142,7 +149,7 @@ def render_user_management():
         new_pwd = st.text_input("New Password *", type="password")
         confirm_pwd = st.text_input("Confirm New Password *", type="password")
         
-        submitted = st.form_submit_button("Change Password", use_container_width=True)
+        submitted = st.form_submit_button("Change password", width="stretch")
         
         if submitted:
             if not new_pwd:
@@ -153,7 +160,7 @@ def render_user_management():
                 st.error("Password must be at least 6 characters")
             else:
                 result = change_password(user_for_password, new_pwd)
-                if "✅" in result:
+                if result.startswith("OK:"):
                     st.success(result)
                 else:
                     st.error(result)
@@ -195,7 +202,7 @@ def render_system_stats():
         
         # Document types
         st.markdown("---")
-        st.subheader("📊 Documents by Type")
+        st.subheader("Documents by type")
         
         doc_types = {}
         for doc in all_docs:
@@ -218,7 +225,7 @@ def render_system_stats():
         
         # Document ownership
         st.markdown("---")
-        st.subheader("👥 Documents by Owner")
+        st.subheader("Documents by owner")
         
         owner_counts = {}
         for doc in all_docs:
@@ -247,17 +254,17 @@ def render_settings():
     """Render system settings."""
     st.subheader("System Settings")
     
-    st.info("⚙️ Settings management coming soon...")
+    st.info("Settings management coming soon")
     
     # API endpoint configuration
-    st.markdown("### 🔗 API Configuration")
+    st.markdown("### API configuration")
     
     from config import API_BASE_URL
     st.code(f"API Base URL: {API_BASE_URL}")
     
     # Check API health
     if api_client.health_check():
-        st.success("✅ API is online and responding")
+        st.success("API is online and responding")
     else:
-        st.error("❌ API is offline or not responding")
+        st.error("API is offline or not responding")
         st.code("Start backend: uvicorn main:app --reload")

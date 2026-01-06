@@ -5,8 +5,8 @@ Helper functions for Streamlit app.
 import requests
 import streamlit as st
 from typing import Dict, Any, List
-from config import API_BASE_URL
-from auth_config import credentials
+from frontend.config import API_BASE_URL
+from frontend.auth_config import credentials
 
 
 def check_api_health() -> bool:
@@ -55,29 +55,29 @@ def format_file_size(size_bytes: int) -> str:
 
 def display_error(error: Exception, context: str = ""):
     """Display error message in standardized format."""
-    from utils.api_client import RateLimitError, APIError
+    from frontend.utils.api_client import RateLimitError, APIError
     
     error_msg = str(error)
     
     # Handle specific error types
     if isinstance(error, RateLimitError):
         st.error(
-            f"⏱️ **Rate Limit Exceeded**\n\n"
+            "**Rate limit exceeded**\n\n"
             f"Too many requests. Please wait {error.retry_after} seconds before trying again.\n\n"
-            f"💡 **Tip:** Reduce request frequency or upgrade your plan."
+            "Tip: reduce request frequency and try again."
         )
     elif isinstance(error, APIError):
-        st.error(f"❌ **API Error:** {error_msg}")
+        st.error(f"**API error:** {error_msg}")
     elif "403" in error_msg:
-        st.error(f"⛔ **Access Denied:** You don't have permission to {context}")
+        st.error(f"**Access denied:** You don't have permission to {context}")
     elif "404" in error_msg:
-        st.error(f"🔍 **Not Found:** {context}")
+        st.error(f"**Not found:** {context}")
     elif "500" in error_msg:
-        st.error(f"💥 **Server Error:** {context}\n\nPlease try again later or contact support.")
+        st.error(f"**Server error:** {context}\n\nPlease try again later or contact support.")
     elif "timeout" in error_msg.lower():
-        st.error(f"⏰ **Timeout:** Request took too long. Please try again.")
+        st.error("**Timeout:** Request took too long. Please try again.")
     else:
-        st.error(f"❌ **Error:** {error_msg}")
+        st.error(f"**Error:** {error_msg}")
 
 
 def paginate_items(items: List[Any], page: int, items_per_page: int) -> tuple:
@@ -97,12 +97,12 @@ def display_pagination_controls(total_pages: int, current_page: int, key_prefix:
     col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
     
     with col1:
-        if st.button("⏮️ First", disabled=current_page == 0, key=f"{key_prefix}_first"):
+        if st.button("First", disabled=current_page == 0, key=f"{key_prefix}_first"):
             st.session_state[f"{key_prefix}_page"] = 0
             st.rerun()
     
     with col2:
-        if st.button("◀️ Prev", disabled=current_page == 0, key=f"{key_prefix}_prev"):
+        if st.button("Prev", disabled=current_page == 0, key=f"{key_prefix}_prev"):
             st.session_state[f"{key_prefix}_page"] = current_page - 1
             st.rerun()
     
@@ -110,11 +110,11 @@ def display_pagination_controls(total_pages: int, current_page: int, key_prefix:
         st.markdown(f"<div style='text-align: center; padding-top: 5px;'>Page {current_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
     
     with col4:
-        if st.button("Next ▶️", disabled=current_page >= total_pages - 1, key=f"{key_prefix}_next"):
+        if st.button("Next", disabled=current_page >= total_pages - 1, key=f"{key_prefix}_next"):
             st.session_state[f"{key_prefix}_page"] = current_page + 1
             st.rerun()
     
     with col5:
-        if st.button("Last ⏭️", disabled=current_page >= total_pages - 1, key=f"{key_prefix}_last"):
+        if st.button("Last", disabled=current_page >= total_pages - 1, key=f"{key_prefix}_last"):
             st.session_state[f"{key_prefix}_page"] = total_pages - 1
             st.rerun()

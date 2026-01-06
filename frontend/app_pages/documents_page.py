@@ -3,22 +3,25 @@ Documents management page.
 """
 
 import streamlit as st
-from utils.api_client import api_client
+
+from frontend.utils.api_client import api_client
 import time
-from utils.helpers import (
+
+from frontend.utils.helpers import (
     get_request_headers, 
     display_error, 
     can_access_document,
     paginate_items,
     display_pagination_controls
 )
-from config import ITEMS_PER_PAGE
+
+from frontend.config import ITEMS_PER_PAGE
 
 
 def render():
     """Render documents page."""
-    st.title("📚 My Documents")
-    st.caption("View and manage your uploaded documents")
+    st.title("Documents")
+    st.caption("View and manage uploaded documents")
     
     # Get user info
     username = st.session_state.get('username')
@@ -39,7 +42,7 @@ def render():
             )
         else:
             owner_filter = username
-            st.info(f"Showing: Your documents")
+            st.info("Scope: your documents")
     
     with col2:
         doc_type_filter = st.selectbox(
@@ -50,7 +53,7 @@ def render():
     with col3:
         st.write("")  # Spacer
         st.write("")  # Spacer
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("Refresh", use_container_width=True):
             st.rerun()
     
     # Load documents
@@ -70,7 +73,7 @@ def render():
             documents = [d for d in documents if d.get('doc_type') == doc_type_filter]
         
         if not documents:
-            st.info("📭 No documents found")
+            st.info("No documents found")
             return
         
         # Display stats
@@ -92,7 +95,7 @@ def render():
         
         # Display documents
         for doc in paginated_docs:
-            with st.expander(f"📄 {doc.get('title', 'Untitled')}", expanded=False):
+            with st.expander(f"{doc.get('title', 'Untitled')}", expanded=False):
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
@@ -116,26 +119,26 @@ def render():
                     st.markdown("**Actions:**")
                     
                     # View details button
-                    if st.button("👁️ View Details", key=f"view_{doc['doc_id']}", use_container_width=True):
+                    if st.button("View details", key=f"view_{doc['doc_id']}", use_container_width=True):
                         st.session_state['selected_doc'] = doc['doc_id']
                         st.rerun()
                     
                     # Delete button (if user has permission)
                     if can_access_document(username, doc.get('owner', '')):
-                        if st.button("🗑️ Delete", key=f"delete_{doc['doc_id']}", use_container_width=True, type="secondary"):
+                        if st.button("Delete", key=f"delete_{doc['doc_id']}", use_container_width=True, type="secondary"):
                             st.session_state['confirm_delete'] = doc['doc_id']
                             st.rerun()
                 
                 # Show delete confirmation
                 if st.session_state.get('confirm_delete') == doc['doc_id']:
-                    st.warning(f"⚠️ Are you sure you want to delete '{doc.get('title')}'?")
+                    st.warning(f"Are you sure you want to delete '{doc.get('title')}'?")
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        if st.button("✅ Yes, Delete", key=f"confirm_delete_{doc['doc_id']}", type="primary", use_container_width=True):
+                        if st.button("Yes, delete", key=f"confirm_delete_{doc['doc_id']}", type="primary", use_container_width=True):
                             try:
                                 api_client.delete_document(doc['doc_id'], headers)
-                                st.success(f"✅ Document deleted successfully!")
+                                st.success("Document deleted")
                                 del st.session_state['confirm_delete']
                                 time.sleep(1)
                                 st.rerun()
@@ -143,7 +146,7 @@ def render():
                                 display_error(e, "delete document")
                     
                     with col2:
-                        if st.button("❌ Cancel", key=f"cancel_delete_{doc['doc_id']}", use_container_width=True):
+                        if st.button("Cancel", key=f"cancel_delete_{doc['doc_id']}", use_container_width=True):
                             del st.session_state['confirm_delete']
                             st.rerun()
         
@@ -163,7 +166,7 @@ def render():
 def show_document_details(doc_id: str, username: str, role: str):
     """Show detailed document information in modal."""
     st.markdown("---")
-    st.subheader("📄 Document Details")
+    st.subheader("Document details")
     
     try:
         headers = get_request_headers(username, role)
@@ -186,38 +189,38 @@ def show_document_details(doc_id: str, username: str, role: str):
         
         # Statistics
         if doc.get('stats'):
-            st.markdown("### 📊 Statistics")
+            st.markdown("### Statistics")
             stats = doc['stats']
             
             # Structure: Chapters → Sections → Text Chunks
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("📚 Chapters", stats.get('chapters', 0))
+                st.metric("Chapters", stats.get('chapters', 0))
             with col2:
-                st.metric("📄 Sections", stats.get('sections', 0))
+                st.metric("Sections", stats.get('sections', 0))
             with col3:
-                st.metric("📝 Text Chunks", stats.get('text_chunks', 0))
+                st.metric("Text chunks", stats.get('text_chunks', 0))
             
             # Visual elements: Schemas and Tables
             col4, col5, col6 = st.columns(3)
             with col4:
-                st.metric("🔧 Schemas", stats.get('schemas', 0))
+                st.metric("Schemas", stats.get('schemas', 0))
             with col5:
-                st.metric("📊 Tables", stats.get('tables', 0))
+                st.metric("Tables", stats.get('tables', 0))
             with col6:
-                st.metric("📋 Table Chunks", stats.get('table_chunks', 0))
+                st.metric("Table chunks", stats.get('table_chunks', 0))
             
             # Entities
             if stats.get('entities', 0) > 0:
-                st.metric("🏷️ Entities", stats.get('entities', 0))
+                st.metric("Entities", stats.get('entities', 0))
         
         # Close button
-        if st.button("✖️ Close", use_container_width=True):
+        if st.button("Close", use_container_width=True):
             del st.session_state['selected_doc']
             st.rerun()
     
     except Exception as e:
         display_error(e, "load document details")
-        if st.button("✖️ Close"):
+        if st.button("Close"):
             del st.session_state['selected_doc']
             st.rerun()

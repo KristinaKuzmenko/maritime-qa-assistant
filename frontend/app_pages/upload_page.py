@@ -4,15 +4,16 @@ Document upload page.
 
 import streamlit as st
 import time
-from utils.api_client import api_client
-from utils.helpers import get_request_headers, display_error, format_file_size
-from config import MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES
+
+from frontend.utils.api_client import api_client
+from frontend.utils.helpers import get_request_headers, display_error, format_file_size
+from frontend.config import MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES
 
 
 def render():
     """Render document upload page."""
-    st.title("📤 Upload Document")
-    st.caption("Upload maritime technical documentation for processing")
+    st.title("Upload")
+    st.caption("Upload a PDF document for processing")
     
     # Get user info
     username = st.session_state.get('username')
@@ -20,7 +21,7 @@ def render():
     
     # Upload form
     with st.form("upload_form", clear_on_submit=True):
-        st.subheader("Document Information")
+        st.subheader("Document information")
         
         # File upload
         uploaded_file = st.file_uploader(
@@ -76,7 +77,7 @@ def render():
             )
         
         # Submit button
-        submitted = st.form_submit_button("📤 Upload & Process", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Upload & process", type="primary", use_container_width=True)
         
         if submitted:
             # Validation
@@ -106,13 +107,13 @@ def render():
                         task_id = response.get('task_id')
                         doc_id = response.get('doc_id')
                         
-                        st.success(f"✅ Document uploaded successfully!")
-                        st.info(f"📄 Document ID: `{doc_id}`")
-                        st.info(f"🔄 Processing Task ID: `{task_id}`")
+                        st.success("Document uploaded")
+                        st.info(f"Document ID: `{doc_id}`")
+                        st.info(f"Processing task ID: `{task_id}`")
                         
                         # Show processing status
                         st.markdown("---")
-                        st.subheader("📊 Processing Status")
+                        st.subheader("Processing status")
                         
                         status_placeholder = st.empty()
                         progress_bar = st.progress(0)
@@ -135,12 +136,11 @@ def render():
                                 
                                 # Check if complete
                                 if current_status == 'completed':
-                                    status_placeholder.success(f"✅ Processing completed!\n\n{message}")
+                                    status_placeholder.success(f"Processing completed\n\n{message}")
                                     progress_bar.progress(1.0)
-                                    st.balloons()
                                     break
                                 elif current_status == 'failed':
-                                    status_placeholder.error(f"❌ Processing failed\n\n{message}")
+                                    status_placeholder.error(f"Processing failed\n\n{message}")
                                     break
                                 
                                 time.sleep(5)
@@ -151,14 +151,14 @@ def render():
                                 break
                         
                         if attempt >= max_attempts:
-                            st.warning("⏰ Status polling timeout. Processing continues in background.")
+                            st.warning("Status polling timed out. Processing continues in background.")
                         
                 except Exception as e:
                     display_error(e, "upload document")
     
     # Instructions
     st.markdown("---")
-    st.subheader("📋 Upload Instructions")
+    st.subheader("Upload instructions")
     
     col1, col2 = st.columns(2)
     
@@ -182,4 +182,4 @@ def render():
         - Graph database indexing
         """)
     
-    st.info("💡 **Tip:** Processing time depends on document size and complexity. Large documents may take several minutes.")
+    st.info("Tip: processing time depends on document size and layout complexity.")

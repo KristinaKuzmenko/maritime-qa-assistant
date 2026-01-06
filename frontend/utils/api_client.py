@@ -6,7 +6,7 @@ import requests
 import time
 import streamlit as st
 from typing import Dict, Any, List, Optional, Callable
-from config import API_BASE_URL
+from frontend.config import API_BASE_URL
 
 
 
@@ -61,7 +61,7 @@ def handle_api_request(
                 if attempt < max_retries - 1:
                     if show_progress:
                         st.warning(
-                            f"⏱️ Rate limit exceeded. "
+                            f"Rate limit exceeded. "
                             f"Retrying in {retry_after} seconds... "
                             f"(Attempt {attempt + 1}/{max_retries})"
                         )

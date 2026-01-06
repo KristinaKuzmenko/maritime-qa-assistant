@@ -3,15 +3,23 @@ Search and Q&A page.
 """
 
 import streamlit as st
-from utils.api_client import api_client
-from utils.helpers import get_request_headers, display_error
+
+from frontend.utils.api_client import api_client
+from frontend.utils.helpers import get_request_headers, display_error
 
 MAX_CONTEXT_MESSAGES = 20
 
+
+def get_image_url(url: str) -> str:
+    """Convert relative path to full URL, or return presigned URL as-is."""
+    if url.startswith('http://') or url.startswith('https://'):
+        return url  # Already a full URL (presigned S3 URL)
+    return f"http://localhost:8000{url}"  # Local path, add base URL
+
 def render():
     """Render search and Q&A page."""
-    st.title("🔍 Search & Q&A")
-    st.caption("Ask questions about your maritime technical documentation")
+    st.title("Search")
+    st.caption("Ask questions about your documents")
     
     # Get user info
     username = st.session_state.get('username')
@@ -23,7 +31,7 @@ def render():
     
     # Settings in sidebar
     with st.sidebar:
-        st.subheader("⚙️ Search Settings")
+        st.subheader("Search settings")
         
         # Owner filter
         if role == 'admin':
@@ -34,7 +42,7 @@ def render():
             )
         else:
             owner_filter = username
-            st.info(f"Searching in: Your documents")
+            st.info("Scope: your documents")
         
         # Document filter
         try:
@@ -54,7 +62,7 @@ def render():
                 }
                 
                 selected_doc = st.selectbox(
-                    "📚 Filter by document",
+                    "Filter by document",
                     options=list(doc_options.keys()),
                     help="Search only in selected document(s)"
                 )
@@ -65,24 +73,24 @@ def render():
                 st.info("No documents available")
         except Exception as e:
             doc_ids_filter = None
-            st.warning(f"⚠️ Could not load documents: {str(e)}")
+            st.warning(f"Could not load documents: {str(e)}")
         
         # Debug mode (admin only)
         debug_mode = False
         if role == 'admin':
             debug_mode = st.checkbox(
-                "🐛 Debug Mode",
+                "Debug mode",
                 value=False,
                 help="Show detailed workflow information"
             )
         
         # Clear chat button
-        if st.button("🗑️ Clear Chat History", use_container_width=True):
+        if st.button("Clear chat history", use_container_width=True):
             st.session_state['chat_history'] = []
             st.rerun()
     
     # Display chat history
-    st.markdown("### 💬 Conversation")
+    st.markdown("### Conversation")
     
     for i, msg in enumerate(st.session_state['chat_history']):
         with st.chat_message(msg["role"]):
@@ -91,19 +99,19 @@ def render():
             # Display figures/tables if available
             if msg["role"] == "assistant":
                 if msg.get("figures"):
-                    with st.expander("📊 Figures", expanded=False):
+                    with st.expander("Figures", expanded=False):
                         for fig in msg["figures"]:
                             st.image(
-                                f"http://localhost:8000{fig['url']}",
+                                get_image_url(fig['url']),
                                 caption=f"{fig['title']} - Page {fig['page']}"
                             )
                 
                 if msg.get("tables"):
-                    with st.expander("📋 Tables", expanded=False):
+                    with st.expander("Tables", expanded=False):
                         for table in msg["tables"]:
                             st.markdown(f"**{table['title']}** (Page {table['page']})")
                             if table.get('url'):
-                                st.image(f"http://localhost:8000{table['url']}")
+                                st.image(get_image_url(table['url']))
     
     # Chat input
     question = st.chat_input("Ask a question about your documents...")
@@ -144,23 +152,23 @@ def render():
                         )
                         
                         # Show debug info
-                        with st.expander("🐛 Debug Information", expanded=True):
-                            st.markdown("### 🎯 Query Analysis")
+                        with st.expander("Debug information", expanded=True):
+                            st.markdown("### Query analysis")
                             st.json(result.get('step_1_query_analysis', {}))
                             
-                            st.markdown("### 🤖 Agent Tool Selection")
+                            st.markdown("### Agent tool selection")
                             st.json(result.get('step_2_router_agent', {}))
                             
-                            st.markdown("### ⚙️ Tool Execution")
+                            st.markdown("### Tool execution")
                             st.json(result.get('step_3_tool_execution', {}))
                             
-                            st.markdown("### 📍 Anchor Selection")
+                            st.markdown("### Anchor selection")
                             st.json(result.get('step_4_anchor_selection', {}))
                             
-                            st.markdown("### 📦 Context Building")
+                            st.markdown("### Context building")
                             st.json(result.get('step_5_context_building', {}))
                             
-                            st.markdown("### ✍️ Answer Generation")
+                            st.markdown("### Answer generation")
                             st.json(result.get('step_6_answer', {}))
                         
                         # Extract answer from debug response
@@ -191,20 +199,20 @@ def render():
                     
                     # Display figures
                     if figures:
-                        with st.expander("📊 Figures", expanded=False):
+                        with st.expander("Figures", expanded=False):
                             for fig in figures:
                                 st.image(
-                                    f"http://localhost:8000{fig['url']}",
+                                    get_image_url(fig['url']),
                                     caption=f"{fig['title']} - Page {fig['page']}"
                                 )
                     
                     # Display tables
                     if tables:
-                        with st.expander("📋 Tables", expanded=False):
+                        with st.expander("Tables", expanded=False):
                             for table in tables:
                                 st.markdown(f"**{table['title']}** (Page {table['page']})")
                                 if table.get('url'):
-                                    st.image(f"http://localhost:8000{table['url']}")
+                                    st.image(get_image_url(table['url']))
                     
                     # Add assistant message to chat
                     st.session_state['chat_history'].append({

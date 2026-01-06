@@ -70,7 +70,7 @@ def add_user(
     creds = _load_creds()
     
     if username in creds.get("usernames", {}):
-        return f"❌ User '{username}' already exists"
+        return f"ERROR: user '{username}' already exists"
     
     creds["usernames"][username] = {
         "name": name or username,
@@ -80,7 +80,7 @@ def add_user(
     }
     
     _save_creds(creds)
-    return f"✅ User '{username}' created (role: {role})"
+    return f"OK: user '{username}' created (role: {role})"
 
 
 def remove_user(username: str) -> str:
@@ -88,11 +88,11 @@ def remove_user(username: str) -> str:
     creds = _load_creds()
     
     if username not in creds.get("usernames", {}):
-        return f"❌ User '{username}' not found"
+        return f"ERROR: user '{username}' not found"
     
     del creds["usernames"][username]
     _save_creds(creds)
-    return f"✅ User '{username}' removed"
+    return f"OK: user '{username}' removed"
 
 
 def change_password(username: str, new_password: str) -> str:
@@ -100,11 +100,11 @@ def change_password(username: str, new_password: str) -> str:
     creds = _load_creds()
     
     if username not in creds.get("usernames", {}):
-        return f"❌ User '{username}' not found"
+        return f"ERROR: user '{username}' not found"
     
     creds["usernames"][username]["password"] = _hash_password(new_password)
     _save_creds(creds)
-    return f"✅ Password changed for '{username}'"
+    return f"OK: password changed for '{username}'"
 
 
 def list_users() -> list[dict]:
@@ -128,7 +128,7 @@ def _init_credentials():
     
     if not admin_pass:
         raise ValueError(
-            "❌ First run requires ADMIN_PASSWORD in .env file!\n"
+            "First run requires ADMIN_PASSWORD in .env file.\n"
             "Add to your .env:\n"
             "  ADMIN_PASSWORD=your_secure_password\n"
             "  ADMIN_USERNAME=admin  # optional, default: admin"
@@ -146,7 +146,7 @@ def _init_credentials():
     }
     
     _save_creds(creds)
-    print(f"✅ Created credentials file with admin user: {admin_user}")
+    print(f"Created credentials file with admin user: {admin_user}")
     
     return creds
 

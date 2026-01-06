@@ -1,27 +1,31 @@
-"""
-Streamlit web application for maritime technical documentation system.
+"""Streamlit web application for maritime technical documentation system.
+
 Main entry point with authentication and page routing.
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is importable so we can use stable package imports
+# like `frontend.utils.*` regardless of how Streamlit sets sys.path.
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import streamlit as st
 import streamlit_authenticator as stauth
-from auth_config import credentials, cookie
+
+from frontend.auth_config import credentials, cookie
+from frontend.utils.style import apply_minimal_style
 
 # Configure page
 st.set_page_config(
-    page_title="Maritime Documentation",
-    page_icon="⚓",
+    page_title="Maritime QA Assistant",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Hide the top navigation menu
-hide_menu_style = """
-<style>
-#MainMenu {visibility: hidden;}
-</style>
-"""
-st.markdown(hide_menu_style, unsafe_allow_html=True)
+apply_minimal_style()
 
 
 # Authentication Setup
@@ -58,17 +62,14 @@ if authentication_status == False:
 elif authentication_status == None:
     st.warning('Please enter your username and password')
 elif authentication_status:
-    # Store user info in session state
-    if 'username' not in st.session_state:
-        st.session_state['username'] = username
-    if 'name' not in st.session_state:
-        st.session_state['name'] = name
-    if 'role' not in st.session_state:
-        st.session_state['role'] = credentials['usernames'][username].get('role', 'user')
+    # Store user info in session state (always overwrite to avoid stale role across logins)
+    st.session_state['username'] = username
+    st.session_state['name'] = name
+    st.session_state['role'] = credentials['usernames'][username].get('role', 'user')
     
     # Sidebar navigation
     with st.sidebar:
-        st.title(f"👋 Welcome, {name}!")
+        st.title(f"Welcome, {name}")
         st.caption(f"Role: {st.session_state.get('role', 'user')}")
         
         # Navigation
@@ -76,38 +77,53 @@ elif authentication_status:
         st.subheader("Navigation")
         
         # Import pages
-        from app_pages import chat_page, upload_page, documents_page, admin_page
+        from frontend.app_pages import chat_page, upload_page, documents_page, admin_page, help_page
         from utils.helpers import check_api_health
         
         # Check API health
         api_status = check_api_health()
         if api_status:
-            st.success("✅ API Connected")
+            st.success("API: online")
         else:
-            st.error("❌ API Offline")
+            st.error("API: offline")
             st.caption("Start backend: `uvicorn main:app`")
         
         # Page selection
         pages = {
-            "🔍 Search & Q&A": chat_page,
-            "📤 Upload Document": upload_page,
-            "📚 My Documents": documents_page,
+            "Search": chat_page,
+            "Upload": upload_page,
+            "Documents": documents_page,
+            "Help": help_page,
         }
         
         # Add admin page for admins
         if st.session_state['role'] == 'admin':
-            pages["⚙️ Admin Panel"] = admin_page
-        
-        # Page selector
-        selected_page = st.radio(
-            "Go to",
-            list(pages.keys()),
-            label_visibility="collapsed"
-        )
+            pages["Admin"] = admin_page
+
+        # Button-based navigation (modern, no radio)
+        if "selected_page" not in st.session_state:
+            st.session_state["selected_page"] = next(iter(pages.keys()))
+
+        # If user role changed (e.g., admin -> user), previously selected page may be invalid.
+        if st.session_state.get("selected_page") not in pages:
+            st.session_state["selected_page"] = next(iter(pages.keys()))
+
+        for page_name in pages.keys():
+            is_active = st.session_state.get("selected_page") == page_name
+            if st.button(
+                page_name,
+                key=f"nav_{page_name}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state["selected_page"] = page_name
+                st.rerun()
+
+        selected_page = st.session_state.get("selected_page", next(iter(pages.keys())))
         
         st.markdown("---")
         
-        # Logout button
+        st.subheader("Account")
         authenticator.logout('Logout', 'sidebar')
     
     # Render selected page
