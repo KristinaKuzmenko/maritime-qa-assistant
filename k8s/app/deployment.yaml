@@ -83,7 +83,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -92,7 +92,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
@@ -102,7 +102,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
