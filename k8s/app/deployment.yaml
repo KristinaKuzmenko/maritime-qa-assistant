@@ -1,21 +1,19 @@
 # =============================================================================
-# Maritime QA Backend Deployment
+# Maritime QA Application Deployment
 # =============================================================================
 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: maritime-qa-backend
+  name: maritime-qa-app
   namespace: maritime-qa
   labels:
     app: maritime-qa
-    component: backend
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: maritime-qa
-      component: backend
   
   # Rolling update strategy
   strategy:
@@ -28,7 +26,6 @@ spec:
     metadata:
       labels:
         app: maritime-qa
-        component: backend
       annotations:
         # Force restart on config changes
         checksum/config: "PLACEHOLDER"
@@ -42,14 +39,17 @@ spec:
         fsGroup: 1000
       
       containers:
-        - name: backend
+        - name: app
           # ECR image (both backend and frontend in same image)
           image: 930953062641.dkr.ecr.us-east-1.amazonaws.com/maritime-qa-app:latest
           imagePullPolicy: Always
           
           ports:
-            - name: http
+            - name: backend
               containerPort: 8000
+              protocol: TCP
+            - name: frontend
+              containerPort: 8501
               protocol: TCP
           
           # Environment from ConfigMap
