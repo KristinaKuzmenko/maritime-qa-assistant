@@ -13,9 +13,13 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - name: http
+    - name: backend
       port: 80
       targetPort: 8000
+      protocol: TCP
+    - name: frontend
+      port: 8501
+      targetPort: 8501
       protocol: TCP
   selector:
     app: maritime-qa
@@ -69,7 +73,30 @@ spec:
   rules:
     - http:
         paths:
+          # Frontend (Streamlit) - default path
           - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: maritime-qa-backend
+                port:
+                  number: 8501
+          # Backend API paths
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: maritime-qa-backend
+                port:
+                  number: 80
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: maritime-qa-backend
+                port:
+                  number: 80
+          - path: /health
             pathType: Prefix
             backend:
               service:
