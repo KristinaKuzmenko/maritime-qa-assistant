@@ -1,0 +1,11 @@
+# =============================================================================
+# Namespace for Maritime QA Application
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maritime-qa
+  labels:
+    app.kubernetes.io/name: maritime-qa
+    app.kubernetes.io/managed-by: argocd

@@ -1,0 +1,24 @@
+# =============================================================================
+# StorageClass - GP3 EBS volumes
+# =============================================================================
+# Required for Qdrant PersistentVolumeClaim
+# Requires EBS CSI Driver addon installed on EKS
+# =============================================================================
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  fsType: ext4
+  encrypted: "true"
+  # Optional: Specify IOPS and throughput
+  # iops: "3000"
+  # throughput: "125"
+reclaimPolicy: Retain  # Keep data when PVC is deleted
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer

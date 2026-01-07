@@ -1,0 +1,79 @@
+# =============================================================================
+# Maritime QA Backend Service
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: maritime-qa-backend
+  namespace: maritime-qa
+  labels:
+    app: maritime-qa
+    component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app: maritime-qa
+    component: backend
+
+---
+# =============================================================================
+# LoadBalancer Service (for external access)
+# =============================================================================
+# Uncomment if you want direct external access without Ingress
+
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: maritime-qa-backend-lb
+#   namespace: maritime-qa
+#   annotations:
+#     service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+#     service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+# spec:
+#   type: LoadBalancer
+#   ports:
+#     - name: http
+#       port: 80
+#       targetPort: 8000
+#   selector:
+#     app: maritime-qa
+#     component: backend
+
+---
+# =============================================================================
+# Ingress (ALB)
+# =============================================================================
+# Requires AWS Load Balancer Controller installed
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: maritime-qa-ingress
+  namespace: maritime-qa
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # For HTTPS, uncomment and configure:
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:region:account:certificate/xxx
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: maritime-qa-backend
+                port:
+                  number: 80
