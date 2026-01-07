@@ -33,7 +33,7 @@ spec:
         name: memory
         target:
           type: Utilization
-          averageUtilization: 80
+          averageUtilization: 85
   
   behavior:
     scaleDown:
