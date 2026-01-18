@@ -2,7 +2,7 @@
 Document management endpoints.
 """
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Header
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Header, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -12,20 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 from middleware.rate_limiter import role_rate_limit
+from core.dependencies import DocumentServices, get_graph_client, get_storage_service
+from core.exceptions import FileUploadError, DocumentNotFoundError, ProcessingError
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Global service instances (set by main.py)
-graph_client = None
-vector_service = None
-embedding_service = None
-storage_service = None
-document_processor = None
-schema_extractor = None
-table_extractor = None
-layout_analyzer = None
 
 # Processing status tracking
 processing_status: Dict[str, Dict[str, Any]] = {}
@@ -57,6 +50,9 @@ async def process_document_background(
     doc_id: str,
     file_path: str,
     metadata: DocumentMetadata,
+    document_processor,
+    storage_service,
+    is_s3_only: bool = False,
 ):
     """Background task for document processing."""
     # initial status
@@ -77,6 +73,36 @@ async def process_document_background(
         }
         logger.error("Document processor not initialized")
         return
+    
+    # If file is in S3 only, download it temporarily for processing
+    temp_file = None
+    actual_file_path = file_path
+    
+    if is_s3_only and storage_service:
+        try:
+            import tempfile
+            logger.info(f"📥 Downloading file from S3 for processing: {file_path}")
+            
+            # Download from S3
+            content = await storage_service.get_file(file_path)
+            
+            # Create temp file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            temp_file.write(content)
+            temp_file.close()
+            actual_file_path = temp_file.name
+            
+            logger.info(f"📄 File downloaded to temp location: {actual_file_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to download file from S3: {e}")
+            processing_status[task_id] = {
+                "status": "failed",
+                "progress": 0,
+                "doc_id": doc_id,
+                "error": f"Failed to download file from S3: {str(e)}",
+                "message": f"Processing failed: Could not access file",
+            }
+            return
 
     # prepare metadata dict (pydantic v2-friendly)
     meta = (
@@ -104,7 +130,7 @@ async def process_document_background(
         logger.info(f"Processing document {doc_id}: {metadata.title}")
 
         result = await document_processor.process_document(
-            pdf_path=file_path,
+            pdf_path=actual_file_path,
             doc_id=doc_id,
             metadata=meta,
             progress_callback=progress_cb,  # make sure process_document accepts this
@@ -137,6 +163,15 @@ async def process_document_background(
             "error": str(e),
             "message": f"Processing failed: {str(e)}",
         }
+    finally:
+        # Clean up temporary file if it was created
+        if temp_file and Path(actual_file_path).exists():
+            try:
+                import os
+                os.unlink(actual_file_path)
+                logger.info(f"🗑️ Temporary file deleted: {actual_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temp file: {e}")
 
 
 # Document Upload
@@ -151,6 +186,7 @@ async def upload_document(
     doc_type: str = Form("manual"),
     owner: str = Form("global"),
     tags: str = Form(""),
+    services: DocumentServices = Depends()
 ):
     """
     Upload and process a PDF document.
@@ -162,18 +198,11 @@ async def upload_document(
     4. Store in Neo4j and Qdrant
     """
     
-    # Check if services are available
-    if not document_processor:
-        raise HTTPException(
-            status_code=503,
-            detail="Document processor not available. Check Neo4j and Qdrant connections."
-        )
-    
     # Validate file type
     if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(
-            status_code=400,
-            detail="Only PDF files are allowed"
+        raise FileUploadError(
+            message="Only PDF files are allowed",
+            filename=file.filename
         )
     
     # Generate IDs
@@ -181,17 +210,51 @@ async def upload_document(
     doc_id = f"doc_{int(datetime.now().timestamp())}"
     
     try:
-        # Save uploaded file
-        upload_dir = Path("data/uploads")
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        # Read file content once
+        content = await file.read()
         
-        file_path = upload_dir / f"{doc_id}.pdf"
+        # Determine storage strategy based on storage_type
+        is_s3_only = settings.storage_type == "s3"
+        file_path = None
+        storage_path = f"uploads/{doc_id}.pdf"
         
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        logger.info(f"📄 File uploaded: {file_path}")
+        if is_s3_only:
+            # S3 storage: save only to S3
+            if not services.storage:
+                raise FileUploadError(
+                    message="S3 storage is configured but not initialized",
+                    filename=file.filename
+                )
+            try:
+                await services.storage.save_file(content, storage_path, content_type="application/pdf")
+                logger.info(f"📤 File uploaded to S3: {storage_path}")
+                file_path = storage_path  # Will be used to download later
+            except Exception as e:
+                logger.error(f"❌ Failed to upload to S3: {e}")
+                raise FileUploadError(
+                    message=f"Failed to upload to S3: {str(e)}",
+                    filename=file.filename
+                )
+        else:
+            # Local storage: save to local filesystem
+            upload_dir = Path("data/uploads")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            
+            local_file_path = upload_dir / f"{doc_id}.pdf"
+            
+            with open(local_file_path, "wb") as f:
+                f.write(content)
+            
+            logger.info(f"📄 File uploaded locally: {local_file_path}")
+            file_path = str(local_file_path)
+            
+            # Optionally also save to S3 if storage service is available
+            if services.storage:
+                try:
+                    await services.storage.save_file(content, storage_path, content_type="application/pdf")
+                    logger.info(f"📤 File also backed up to S3: {storage_path}")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to backup to S3 (non-critical): {e}")
         
         # Parse tags
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
@@ -217,8 +280,11 @@ async def upload_document(
             process_document_background,
             task_id=task_id,
             doc_id=doc_id,
-            file_path=str(file_path),
-            metadata=metadata
+            file_path=file_path,
+            metadata=metadata,
+            document_processor=services.processor,
+            storage_service=services.storage,
+            is_s3_only=is_s3_only
         )
         
         return {
@@ -228,16 +294,21 @@ async def upload_document(
             "status_endpoint": f"/documents/upload/status/{task_id}"
         }
         
+    except FileUploadError:
+        # Re-raise already typed exceptions
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ProcessingError(
+            message=f"Document upload failed: {file.filename}"
+        )
 
 
 @router.get("/upload/status/{task_id}")
 async def get_upload_status(task_id: str):
     """Get document processing status."""
     if task_id not in processing_status:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise DocumentNotFoundError(task_id)
     
     return processing_status[task_id]
 
@@ -245,20 +316,15 @@ async def get_upload_status(task_id: str):
 # Document Management
 
 @router.get("/list", response_model=List[DocumentResponse])
-async def list_documents(owner: Optional[str] = None):
+async def list_documents(owner: Optional[str] = None, graph: Any = Depends(get_graph_client)):
     """
     List all documents.
     Optional filter by owner.
     """
-    if not graph_client:
-        raise HTTPException(
-            status_code=503,
-            detail="Graph database not available"
-        )
     
     try:
         # Use get_all_documents from graph_service
-        documents = await graph_client.get_all_documents(owner=owner)
+        documents = await graph.get_all_documents(owner=owner)
         
         return [
             DocumentResponse(
@@ -274,18 +340,17 @@ async def list_documents(owner: Optional[str] = None):
         
     except Exception as e:
         logger.error(f"Failed to list documents: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ProcessingError(
+            message=f"Failed to list documents for owner: {owner}"
+        )
 
 @router.get("/{doc_id}")
-async def get_document(doc_id: str):
-    if not graph_client:
-        raise HTTPException(status_code=503, detail="Graph database not available")
-
+async def get_document(doc_id: str, graph: Any = Depends(get_graph_client)):
     try:
         # metadata
-        meta = await graph_client.get_document_metadata(doc_id)
+        meta = await graph.get_document_metadata(doc_id)
         if not meta:
-            raise HTTPException(status_code=404, detail="Document not found")
+            raise DocumentNotFoundError(doc_id)
 
         # Try to get saved stats from metadata first
         stats = None
@@ -312,7 +377,7 @@ async def get_document(doc_id: str):
             }
         else:
             # Fallback: calculate stats dynamically (slower)
-            stats_raw = await graph_client.get_document_stats(doc_id)
+            stats_raw = await graph.get_document_stats(doc_id)
             if stats_raw:
                 stats = {
                     "chapters": stats_raw.get("chapters", 0),
@@ -338,11 +403,14 @@ async def get_document(doc_id: str):
             "stats":        stats,
         }
 
-    except HTTPException:
+    except DocumentNotFoundError:
         raise
     except Exception as e:
         logger.error(f"Failed to get document {doc_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ProcessingError(
+            message="Failed to get document details",
+            doc_id=doc_id
+        )
 
 @router.delete("/{doc_id}")
 async def delete_document(
@@ -350,6 +418,7 @@ async def delete_document(
     request: Request,
     user_id: str = Header(None, alias="X-User-Id"),
     user_role: str = Header(None, alias="X-User-Role"),
+    services: DocumentServices = Depends()
 ):
     """
     Delete a document and all associated data.
@@ -363,15 +432,22 @@ async def delete_document(
     
     try:
         # Get document metadata
-        doc_metadata = await graph_client.get_document_metadata(doc_id)
+        doc_metadata = await services.graph.get_document_metadata(doc_id)
         
         if not doc_metadata:
-            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+            raise DocumentNotFoundError(doc_id)
         
         doc_owner = doc_metadata.get("owner", "")
         doc_title = doc_metadata.get("title", "Unknown")
         
-        # Authorization check
+        # Authorization check: global documents can only be deleted by admin
+        if doc_owner == "global" and user_role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Global documents can only be deleted by administrators"
+            )
+        
+        # Regular authorization: users can only delete their own documents
         if user_role != "admin" and doc_owner != user_id:
             raise HTTPException(
                 status_code=403,
@@ -381,42 +457,48 @@ async def delete_document(
         logger.info(f"Deleting document '{doc_title}' (owner: {doc_owner})")
         
         # ===== 1. DELETE FROM NEO4J =====
-        deleted = await graph_client.delete_document(doc_id)
+        deleted = await services.graph.delete_document(doc_id)
         
         if not deleted:
-            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+            raise DocumentNotFoundError(doc_id)
         
         logger.info(f"✅ Deleted document {doc_id} from Neo4j")
         
         # ===== 2. DELETE FROM QDRANT =====
-        if vector_service:
+        if services.vector:
             try:
                 import asyncio
-                await asyncio.to_thread(vector_service.delete_document_vectors, doc_id)
+                await asyncio.to_thread(services.vector.delete_document_vectors, doc_id)
                 logger.info(f"✅ Deleted vectors for document {doc_id} from Qdrant")
             except Exception as e:
                 logger.error(f"⚠️ Failed to delete Qdrant vectors: {e}")
                 # Don't fail the whole operation if Qdrant deletion fails
         
         # ===== 3. DELETE PHYSICAL FILES =====
-        deleted_files = []
+        # Use storage service to delete all files (PDF, schemas, tables) from both local and S3
+        try:
+            deleted_count = await services.storage.delete_document_files(doc_id)
+            logger.info(f"✅ Deleted {deleted_count} files for document {doc_id} from storage")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to delete files from storage: {e}")
+            deleted_count = 0
         
-        # Base data directory (relative to backend or use absolute path)
+        # Also clean up local directories as fallback (in case of hybrid storage)
+        deleted_files = []
         data_dir = Path(__file__).parent.parent.parent / "data"
         
-        # Define PDF locations
+        # Delete local PDF copies
         pdf_locations = [
             data_dir / "uploads" / f"{doc_id}.pdf",
             data_dir / "storage" / "pdfs" / f"{doc_id}.pdf",
         ]
         
-        # Delete PDFs
         for pdf_path in pdf_locations:
             if pdf_path.exists():
                 try:
                     pdf_path.unlink()
                     deleted_files.append(str(pdf_path))
-                    logger.info(f"Deleted PDF: {pdf_path}")
+                    logger.info(f"Deleted local PDF: {pdf_path}")
                 except Exception as e:
                     logger.error(f"Failed to delete {pdf_path}: {e}")
         
@@ -455,34 +537,40 @@ async def delete_document(
                 except Exception as e:
                     logger.error(f"Failed to delete table directory {table_dir}: {e}")
         
-        logger.info(f"✅ Deleted {len(deleted_files)} physical files for document {doc_id}")
+        logger.info(f"✅ Deleted {len(deleted_files)} local files for document {doc_id}")
         
         return {
             "status": "success",
             "message": f"Document '{doc_title}' deleted successfully",
             "doc_id": doc_id,
-            "deleted_files": len(deleted_files),
+            "deleted_files": deleted_count + len(deleted_files),
             "details": {
                 "neo4j": "✅ Deleted",
-                "qdrant": "✅ Deleted" if vector_service else "⚠️ Skipped (not configured)",
-                "files": f"✅ Deleted {len(deleted_files)} files"
+                "qdrant": "✅ Deleted" if services.vector else "⚠️ Skipped (not configured)",
+                "storage": f"✅ Deleted {deleted_count} files from storage (S3/local)",
+                "local_cleanup": f"✅ Deleted {len(deleted_files)} local files"
             }
         }
     
+    except DocumentNotFoundError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Error deleting document {doc_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+        raise ProcessingError(
+            message="Failed to delete document",
+            doc_id=doc_id
+        )
 
 
 @router.get("/{doc_id}/download")
-async def download_document(doc_id: str):
+async def download_document(doc_id: str, storage: Any = Depends(get_storage_service)):
     """Download original PDF file."""
     file_path = Path(f"data/uploads/{doc_id}.pdf")
     
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+        raise DocumentNotFoundError(doc_id)
     
     return FileResponse(
         path=file_path,

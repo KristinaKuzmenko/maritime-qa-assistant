@@ -2,21 +2,18 @@
 Health check endpoints.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from datetime import datetime
 import logging
+
+from core.dependencies import HealthStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-graph_client = None
-vector_service = None
-storage_service = None
-qa_graph = None
-
 @router.get("/health")
-async def health_check():
+async def health_check(status: HealthStatus = Depends()):
     """
     Comprehensive health check endpoint.
     Returns API status and all service availability.
@@ -33,8 +30,8 @@ async def health_check():
     
     # Check Neo4j
     try:
-        if graph_client:
-            stats = await graph_client.get_document_stats(doc_id=None)
+        if status.graph:
+            stats = await status.graph.get_document_stats(doc_id=None)
             health["services"]["neo4j"] = {
                 "status": "healthy",
                 "stats": stats
@@ -55,10 +52,10 @@ async def health_check():
     
     # Check Qdrant
     try:
-        if vector_service:
+        if status.vector:
             # get_collection_info() now returns a dict with collection labels as keys
             # Format: {"text_chunks": {...}, "figures": {...}, "tables": {...}, "summary": {...}}
-            info = vector_service.get_collection_info()
+            info = status.vector.get_collection_info()
             
             collections_info = {}
             
@@ -116,8 +113,8 @@ async def health_check():
     
     # Check Storage
     try:
-        if storage_service:
-            storage_health = await storage_service.health_check()
+        if status.storage:
+            storage_health = await status.storage.health_check()
             health["services"]["storage"] = {
                 "status": "healthy",
                 "info": storage_health
@@ -137,7 +134,7 @@ async def health_check():
         health["status"] = "degraded"
     
     # Check Q&A Workflow
-    if qa_graph:
+    if status.qa:
         health["services"]["qa_workflow"] = {
             "status": "available",
             "message": "LangGraph workflow ready"

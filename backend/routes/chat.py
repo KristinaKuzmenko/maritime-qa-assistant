@@ -2,13 +2,15 @@
 Q&A Chat endpoints using LangGraph workflow.
 """
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 import logging
 
 from middleware.rate_limiter import role_rate_limit
 from core.prompt_injection_filter import PromptInjectionFilter
+from core.dependencies import QueryServices
+from core.exceptions import PromptInjectionError, ProcessingError, ServiceUnavailableError
 from helpers.response_transformer import transform_response_urls_sync
 
 logger = logging.getLogger(__name__)
@@ -17,12 +19,6 @@ logger = logging.getLogger(__name__)
 injection_filter = PromptInjectionFilter(strict_mode=True)
 
 router = APIRouter()
-
-qa_graph = None
-graph_client = None
-qdrant_client = None
-neo4j_driver = None
-storage_service = None  # Added for URL transformation
 
 
 class ChatMessage(BaseModel):
@@ -49,7 +45,11 @@ class AnswerResponse(BaseModel):
 
 @router.post("/answer", response_model=AnswerResponse)
 @role_rate_limit("qa")
-async def answer_question(request: Request, question_req: QuestionRequest):
+async def answer_question(
+    request: Request, 
+    question_req: QuestionRequest,
+    services: QueryServices = Depends()
+):
     """
     Answer a question using agentic LangGraph workflow.
     Chat history is passed from frontend (Streamlit session_state) and used
@@ -63,14 +63,7 @@ async def answer_question(request: Request, question_req: QuestionRequest):
     5. Hard limits (3 sections, 3 tables, 3 schemas)
     """
     
-    # Check if Q&A workflow is available
-    if not qa_graph:
-        raise HTTPException(
-            status_code=503,
-            detail="Q&A service not available. Check Neo4j and Qdrant connections."
-        )
-    
-    # 🛡️ SECURITY: Check for prompt injection attempts
+    # SECURITY: Check for prompt injection attempts
     injection_check = injection_filter.check_query(question_req.question)
     
     if not injection_check.is_safe:
@@ -78,21 +71,23 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             f"🚨 Prompt injection detected: {injection_check.explanation}",
             extra={
                 "user_id": question_req.user_id,
-                "risk_level": injection_check.risk_level,
+                "risk_level": injection_check.risk_level.value,  
                 "patterns": injection_check.detected_patterns,
                 "query_preview": question_req.question[:100]
             }
         )
-        raise HTTPException(
-            status_code=400,
-            detail="Please ask a question about maritime technical documentation. "
-                   "Your query contains content that cannot be processed."
+        raise PromptInjectionError(
+            message="Please ask a question about maritime technical documentation. "
+                   "Your query contains content that cannot be processed.",
+            risk_level=injection_check.risk_level.value,  
+            detected_patterns=injection_check.detected_patterns,
+            query_preview=question_req.question[:100]
         )
     
     # Use sanitized query for processing
     safe_question = injection_check.sanitized_query
     logger.info(
-        f"✅ Query passed injection filter (risk: {injection_check.risk_level})"
+        f"✅ Query passed injection filter (risk: {injection_check.risk_level.value})"
     )
     
     try:
@@ -123,7 +118,7 @@ async def answer_question(request: Request, question_req: QuestionRequest):
         )
         
         # Run agentic LangGraph workflow
-        result = await qa_graph.ainvoke(state)
+        result = await services.qa_graph.ainvoke(state)
         
         # Extract answer data
         answer_data = result.get("answer", {})
@@ -180,7 +175,7 @@ async def answer_question(request: Request, question_req: QuestionRequest):
         )
         
         # 🔄 Transform file paths to accessible URLs for S3 storage
-        if storage_service:
+        if services.storage:
             response_dict = response.dict()
             
             # Log BEFORE transformation
@@ -189,7 +184,7 @@ async def answer_question(request: Request, question_req: QuestionRequest):
             
             response_dict = transform_response_urls_sync(
                 response_dict,
-                storage_service,
+                services.storage,
                 expiration=3600  # 1 hour
             )
             
@@ -218,9 +213,22 @@ async def answer_question(request: Request, question_req: QuestionRequest):
         
         return response
         
+    except PromptInjectionError:
+        # Re-raise already typed exceptions
+        raise
     except Exception as e:
         logger.error(f"Q&A workflow error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        # Check if it's a rate limit error
+        error_msg = str(e)
+        if "429" in error_msg or "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
+            raise ProcessingError(
+                message=f"LLM service is experiencing high traffic. Please try again in a few moments. (Question: {question_req.question[:80]}...)"
+            )
+        
+        raise ProcessingError(
+            message=f"Failed to process query: {question_req.question[:100]}"
+        )
 
 
 def _extract_tools_used(messages: List) -> List[str]:
@@ -246,7 +254,11 @@ def _extract_tools_used(messages: List) -> List[str]:
 
 @router.post("/debug")
 @role_rate_limit("qa")
-async def debug_workflow(request: Request, question_req: QuestionRequest):
+async def debug_workflow(
+    request: Request, 
+    question_req: QuestionRequest,
+    services: QueryServices = Depends()
+):
     """
     UPDATED debug endpoint for agentic workflow.
     
@@ -264,12 +276,6 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
         raise HTTPException(
             status_code=403,
             detail="Debug endpoint is only available for administrators"
-        )
-    
-    if not qa_graph:
-        raise HTTPException(
-            status_code=503,
-            detail="Q&A service not available"
         )
     
     try:
@@ -291,7 +297,7 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
             "answer": {},
         }
         
-        result = await qa_graph.ainvoke(state)
+        result = await services.qa_graph.ainvoke(state)
         
         # Comprehensive debug output for agentic workflow
         return {
@@ -356,12 +362,18 @@ async def debug_workflow(request: Request, question_req: QuestionRequest):
         
     except Exception as e:
         logger.error(f"Debug workflow error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ProcessingError(
+            message=f"Debug workflow failed: {question_req.question[:100]}"
+        )
 
 
 @router.post("/analyze")
 @role_rate_limit("qa")
-async def analyze_query(request: Request, question_req: QuestionRequest):
+async def analyze_query(
+    request: Request, 
+    question_req: QuestionRequest,
+    services: QueryServices = Depends()
+):
     """
     Analyze query intent without running full workflow.
     
@@ -414,7 +426,9 @@ async def analyze_query(request: Request, question_req: QuestionRequest):
         
     except Exception as e:
         logger.error(f"Query analysis error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ProcessingError(
+            message=f"Query analysis failed: {question_req.question[:100]}"
+        )
 
 
 def _explain_intent(intent: str) -> str:
@@ -429,18 +443,12 @@ def _explain_intent(intent: str) -> str:
 
 
 @router.get("/stats")
-async def get_qa_stats():
+async def get_qa_stats(services: QueryServices = Depends()):
     """
     Get Q&A system statistics.
     
     Shows agentic workflow features.
     """
-    
-    if not qa_graph:
-        raise HTTPException(
-            status_code=503,
-            detail="Q&A service not available"
-        )
     
     return {
         "status": "available",
