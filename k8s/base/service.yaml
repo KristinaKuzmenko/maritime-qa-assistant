@@ -64,13 +64,10 @@ metadata:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/healthcheck-path: /health
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: '443'
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:930953062641:certificate/6da4aae5-911f-443b-8200-2bfb0ae8fda3
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
 spec:
   rules:
-    - host: maritime-qa-assistant.com
-      http:
+    - http:
         paths:
           # Frontend (Streamlit) - default path
           - path: /
@@ -102,36 +99,4 @@ spec:
                 name: maritime-qa-backend
                 port:
                   number: 80
-    - host: www.maritime-qa-assistant.com
-      http:
-        paths:
-          # Frontend (Streamlit) - default path
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: maritime-qa-backend
-                port:
-                  number: 8501
-          # Backend API paths
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: maritime-qa-backend
-                port:
-                  number: 80
-          - path: /docs
-            pathType: Prefix
-            backend:
-              service:
-                name: maritime-qa-backend
-                port:
-                  number: 80
-          - path: /health
-            pathType: Prefix
-            backend:
-              service:
-                name: maritime-qa-backend
-                port:
-                  number: 80
+
