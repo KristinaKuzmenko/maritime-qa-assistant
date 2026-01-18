@@ -92,7 +92,7 @@ RATE_LIMITS = {
     },
     "user": {
         "upload": (3, 3600),       # 3 uploads per hour
-        "qa": (20, 3600),           # 20 questions per hour
+        "qa": (30, 3600),           # 30 questions per hour
     },
     "guest": {
         "upload": (0, 3600),        # No uploads
@@ -146,7 +146,9 @@ def role_rate_limit(action: str):
         async def wrapper(request: Request, *args, **kwargs):
             # Get user info from request state (set by auth middleware)
             user_role = getattr(request.state, "user_role", "guest")
-            user_id = getattr(request.state, "user_id", request.client.host)
+            # Handle test environment where request.client is None
+            default_id = request.client.host if request.client else "test-client"
+            user_id = getattr(request.state, "user_id", default_id)
             
             # Check rate limit
             is_allowed, retry_after = check_role_rate_limit(
