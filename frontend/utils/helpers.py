@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 from typing import Dict, Any, List
 from frontend.config import API_BASE_URL
-from frontend.auth_config import credentials
+from frontend.auth_config import get_credentials
 
 
 def check_api_health() -> bool:
@@ -20,6 +20,7 @@ def check_api_health() -> bool:
 
 def get_user_role(username: str) -> str:
     """Get user role from credentials."""
+    credentials = get_credentials()
     return credentials['usernames'].get(username, {}).get('role', 'user')
 
 

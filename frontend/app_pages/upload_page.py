@@ -19,6 +19,15 @@ def render():
     username = st.session_state.get('username')
     role = st.session_state.get('role', 'user')
     
+
+    # Rate limit info
+    if role == "admin":
+        st.info("📊 Upload limit: 10 documents per hour (admin)")
+    elif role == "user":
+        st.info("📊 Upload limit: 3 documents per hour")
+    else:
+        st.warning("⚠️ You need a user account to upload documents")
+    
     # Upload form
     with st.form("upload_form", clear_on_submit=True):
         st.subheader("Document information")
@@ -154,7 +163,12 @@ def render():
                             st.warning("Status polling timed out. Processing continues in background.")
                         
                 except Exception as e:
-                    display_error(e, "upload document")
+                    error_msg = str(e)
+                    if "rate limit" in error_msg.lower() or "429" in error_msg:
+                        st.error(f"⏱️ Rate limit exceeded: {error_msg}")
+                        st.info(f"💡 Upload limit for '{role}' users: 3 per hour. Please try again later.")
+                    else:
+                        display_error(e, "upload document")
     
     # Instructions
     st.markdown("---")

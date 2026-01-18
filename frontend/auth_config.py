@@ -1,23 +1,24 @@
 """
-Simple authentication for MVP.
-Uses streamlit-authenticator with JSON credentials file.
+User authentication using AWS DynamoDB.
+Secure, scalable storage for user credentials.
 
-First run: set environment variables to create admin user:
-  ADMIN_USERNAME=admin
-  ADMIN_PASSWORD=your_secure_password
-
-User management:
-  from auth_config import add_user, remove_user, list_users
-  add_user("john", "password123", "John Doe", "user")
-  remove_user("john")
-  list_users()
+Environment variables:
+  DYNAMODB_USERS_TABLE: DynamoDB table name (default: dev-maritime-qa-users)
+  AWS_REGION: AWS region (default: us-east-1)
+  
+First run: Admin user created from ADMIN_USERNAME/ADMIN_PASSWORD env vars
 """
 
 import streamlit_authenticator as stauth
-import json
+import boto3
 import sys
+import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional, Dict, List
+from botocore.exceptions import ClientError
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Add backend to path to import settings
 backend_path = Path(__file__).parent.parent / "backend"
@@ -25,33 +26,54 @@ sys.path.insert(0, str(backend_path))
 
 from core.config import settings
 
-# Path to credentials file
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
+# DynamoDB configuration
+DYNAMODB_TABLE = os.getenv("DYNAMODB_USERS_TABLE", "dev-maritime-qa-users")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+# Initialize DynamoDB client
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+users_table = dynamodb.Table(DYNAMODB_TABLE)
 
 
 def _hash_password(password: str) -> str:
     """Hash password using streamlit-authenticator 0.4.x API."""
     try:
-        # Version 0.4.x: Hasher.hash() is a static method
         return stauth.Hasher.hash(password)
     except (AttributeError, TypeError):
-        # Fallback to bcrypt directly if streamlit-authenticator fails
         import bcrypt
         return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
+def _get_user(username: str) -> Optional[Dict]:
+    """Get user from DynamoDB."""
+    try:
+        response = users_table.get_item(Key={'username': username})
+        return response.get('Item')
+    except ClientError as e:
+        logger.error(f"Error getting user {username}: {e}")
+        return None
+
+
 def _load_creds() -> dict:
-    """Load credentials from file."""
-    if not CREDENTIALS_FILE.exists():
+    """Load all credentials from DynamoDB."""
+    try:
+        response = users_table.scan()
+        items = response.get('Items', [])
+        
+        # Convert DynamoDB format to streamlit-authenticator format
+        credentials = {"usernames": {}}
+        for item in items:
+            credentials["usernames"][item['username']] = {
+                "name": item.get('name', item['username']),
+                "password": item['password_hash'],
+                "role": item.get('role', 'user'),
+                "email": item.get('email', f"{item['username']}@example.com")
+            }
+        
+        return credentials
+    except ClientError as e:
+        logger.error(f"Error loading credentials: {e}")
         return {"usernames": {}}
-    with open(CREDENTIALS_FILE, "r") as f:
-        return json.load(f)
-
-
-def _save_creds(creds: dict) -> None:
-    """Save credentials to file."""
-    with open(CREDENTIALS_FILE, "w") as f:
-        json.dump(creds, f, indent=2)
 
 
 def add_user(
@@ -62,101 +84,103 @@ def add_user(
     email: str = ""
 ) -> str:
     """
-    Add a new user.
+    Add a new user to DynamoDB.
     
     Example:
         add_user("john", "securepass123", "John Doe", "user")
     """
-    creds = _load_creds()
-    
-    if username in creds.get("usernames", {}):
+    # Check if user exists
+    if _get_user(username):
         return f"ERROR: user '{username}' already exists"
     
-    creds["usernames"][username] = {
-        "name": name or username,
-        "password": _hash_password(password),
-        "role": role,
-        "email": email or f"{username}@example.com"
-    }
-    
-    _save_creds(creds)
-    return f"OK: user '{username}' created (role: {role})"
+    try:
+        users_table.put_item(
+            Item={
+                'username': username,
+                'password_hash': _hash_password(password),
+                'name': name or username,
+                'role': role,
+                'email': email or f"{username}@example.com"
+            }
+        )
+        logger.info(f"Created user: {username} (role: {role})")
+        return f"OK: user '{username}' created (role: {role})"
+    except ClientError as e:
+        logger.error(f"Error creating user {username}: {e}")
+        return f"ERROR: {str(e)}"
 
 
 def remove_user(username: str) -> str:
-    """Remove a user by username."""
-    creds = _load_creds()
-    
-    if username not in creds.get("usernames", {}):
+    """Remove a user from DynamoDB."""
+    if not _get_user(username):
         return f"ERROR: user '{username}' not found"
     
-    del creds["usernames"][username]
-    _save_creds(creds)
-    return f"OK: user '{username}' removed"
+    try:
+        users_table.delete_item(Key={'username': username})
+        logger.info(f"Deleted user: {username}")
+        return f"OK: user '{username}' removed"
+    except ClientError as e:
+        logger.error(f"Error deleting user {username}: {e}")
+        return f"ERROR: {str(e)}"
 
 
 def change_password(username: str, new_password: str) -> str:
-    """Change user's password."""
-    creds = _load_creds()
-    
-    if username not in creds.get("usernames", {}):
+    """Change user password in DynamoDB."""
+    if not _get_user(username):
         return f"ERROR: user '{username}' not found"
     
-    creds["usernames"][username]["password"] = _hash_password(new_password)
-    _save_creds(creds)
-    return f"OK: password changed for '{username}'"
+    try:
+        users_table.update_item(
+            Key={'username': username},
+            UpdateExpression='SET password_hash = :pwd',
+            ExpressionAttributeValues={':pwd': _hash_password(new_password)}
+        )
+        logger.info(f"Changed password for user: {username}")
+        return f"OK: password changed for '{username}'"
+    except ClientError as e:
+        logger.error(f"Error changing password for {username}: {e}")
+        return f"ERROR: {str(e)}"
 
 
 def list_users() -> list[dict]:
-    """List all users (without passwords)."""
-    creds = _load_creds()
-    return [
-        {"username": u, "name": d["name"], "role": d["role"], "email": d["email"]}
-        for u, d in creds.get("usernames", {}).items()
-    ]
+    """List all users (without passwords) from DynamoDB."""
+    try:
+        response = users_table.scan(
+            ProjectionExpression='username, #n, #r, email',
+            ExpressionAttributeNames={'#n': 'name', '#r': 'role'}
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        logger.error(f"Error listing users: {e}")
+        return []
 
 
 def _init_credentials():
-    """Initialize credentials file. Admin created from settings on first run."""
-    if CREDENTIALS_FILE.exists():
-        with open(CREDENTIALS_FILE, "r") as f:
-            return json.load(f)
+    """Initialize DynamoDB with default admin user if not exists."""
+    admin_username = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin")
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@example.com")
     
-    # First run - create admin from settings
-    admin_user = settings.admin_username
-    admin_pass = settings.admin_password
+    # Check if admin exists
+    if _get_user(admin_username):
+        logger.info(f"Admin user '{admin_username}' already exists in DynamoDB")
+        return
     
-    if not admin_pass:
-        raise ValueError(
-            "First run requires ADMIN_PASSWORD in .env file.\n"
-            "Add to your .env:\n"
-            "  ADMIN_PASSWORD=your_secure_password\n"
-            "  ADMIN_USERNAME=admin  # optional, default: admin"
-        )
-    
-    creds = {
-        "usernames": {
-            admin_user: {
-                "name": "Administrator",
-                "password": _hash_password(admin_pass),
-                "role": "admin",
-                "email": f"{admin_user}@example.com"
-            }
-        }
-    }
-    
-    _save_creds(creds)
-    print(f"Created credentials file with admin user: {admin_user}")
-    
-    return creds
+    # Create default admin
+    result = add_user(
+        username=admin_username,
+        password=admin_password,
+        name="Administrator",
+        role="admin",
+        email=admin_email
+    )
+    logger.info(f"Initialized DynamoDB: {result}")
 
 
-# Load credentials
-credentials = _init_credentials()
+# Initialize credentials on first import
+_init_credentials()
 
-# Cookie config
-cookie = {
-    'name': 'maritime_auth',
-    'key': settings.auth_secret_key,
-    'expiry_days': 1
-}
+
+def get_credentials():
+    """Get fresh credentials from DynamoDB."""
+    return _load_creds()

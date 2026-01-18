@@ -15,7 +15,8 @@ if str(project_root) not in sys.path:
 import streamlit as st
 import streamlit_authenticator as stauth
 
-from frontend.auth_config import credentials, cookie
+from frontend.auth_config import get_credentials
+from frontend.config import AUTH_COOKIE_NAME, AUTH_SECRET_KEY, AUTH_COOKIE_EXPIRY_DAYS
 from frontend.utils.style import apply_minimal_style
 
 # Configure page
@@ -29,13 +30,24 @@ apply_minimal_style()
 
 
 # Authentication Setup
+# Load fresh credentials from DynamoDB on each page load
+# Create authenticator on each run to ensure fresh credentials after user changes
+if 'auth_reload_needed' in st.session_state:
+    # Force reload after user management changes
+    del st.session_state['auth_reload_needed']
+    if 'authenticator' in st.session_state:
+        del st.session_state['authenticator']
 
-authenticator = stauth.Authenticate(
-    credentials,
-    cookie['name'],
-    cookie['key'],
-    cookie['expiry_days'],
-)
+if 'authenticator' not in st.session_state:
+    credentials = get_credentials()
+    st.session_state['authenticator'] = stauth.Authenticate(
+        credentials,
+        cookie_name=AUTH_COOKIE_NAME,
+        key=AUTH_SECRET_KEY,
+        cookie_expiry_days=AUTH_COOKIE_EXPIRY_DAYS,
+    )
+
+authenticator = st.session_state['authenticator']
 
 
 # Login
@@ -65,7 +77,9 @@ elif authentication_status:
     # Store user info in session state (always overwrite to avoid stale role across logins)
     st.session_state['username'] = username
     st.session_state['name'] = name
-    st.session_state['role'] = credentials['usernames'][username].get('role', 'user')
+    # Get fresh credentials to ensure role is up-to-date
+    fresh_credentials = get_credentials()
+    st.session_state['role'] = fresh_credentials['usernames'][username].get('role', 'user')
     
     # Sidebar navigation
     with st.sidebar:

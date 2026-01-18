@@ -25,6 +25,12 @@ def render():
     username = st.session_state.get('username')
     role = st.session_state.get('role', 'user')
     
+    # Clear chat history if user changed (to avoid seeing previous user's chats)
+    if 'last_chat_username' not in st.session_state or st.session_state['last_chat_username'] != username:
+        st.session_state['chat_history'] = []
+        st.session_state['last_chat_username'] = username
+        st.rerun()
+    
     # Initialize chat history in session state
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = []

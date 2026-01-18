@@ -6,7 +6,6 @@ import streamlit as st
 import pandas as pd
 
 from frontend.auth_config import (
-    credentials,
     add_user,
     remove_user,
     list_users,
@@ -102,6 +101,8 @@ def render_user_management():
                 result = add_user(new_username, new_password, new_name, new_role, new_email)
                 if result.startswith("OK:"):
                     st.success(result)
+                    # Force authenticator reload on next run
+                    st.session_state['auth_reload_needed'] = True
                     st.rerun()
                 else:
                     st.error(result)
@@ -131,6 +132,8 @@ def render_user_management():
                     result = remove_user(user_to_remove)
                     if result.startswith("OK:"):
                         st.success(result)
+                        # Force authenticator reload on next run
+                        st.session_state['auth_reload_needed'] = True
                         st.rerun()
                     else:
                         st.error(result)
@@ -162,6 +165,8 @@ def render_user_management():
                 result = change_password(user_for_password, new_pwd)
                 if result.startswith("OK:"):
                     st.success(result)
+                    # Force authenticator reload on next run
+                    st.session_state['auth_reload_needed'] = True
                 else:
                     st.error(result)
 
