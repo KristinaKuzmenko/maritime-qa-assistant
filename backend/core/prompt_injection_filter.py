@@ -6,8 +6,6 @@ Multi-layer defense against prompt injection attacks:
 2. Heuristic analysis (structure, encoding, length)
 3. Context-aware filtering (maritime domain whitelist)
 4. Input sanitization
-
-Optimized for maritime technical documentation Q&A systems.
 """
 
 import re
@@ -73,9 +71,7 @@ class PromptInjectionFilter:
     - Performance-optimized with compiled patterns
     """
     
-    # =========================================================================
     # CRITICAL PATTERNS - Immediate block
-    # =========================================================================
     CRITICAL_PATTERNS = [
         # Role/Identity manipulation
         (r'(?i)\b(you are now|now you are|from now on|'
@@ -140,10 +136,8 @@ class PromptInjectionFilter:
         (r'(?i)enable\s+(hypothetical|fictional|creative)\s+mode',
          'jailbreak_hypothetical'),
     ]
-    
-    # =========================================================================
+
     # HIGH RISK PATTERNS - Block unless whitelisted context
-    # =========================================================================
     HIGH_RISK_PATTERNS = [
         # Newline/delimiter injection
         (r'(\n\s*){3,}(system|assistant|user)\s*:',
@@ -176,9 +170,8 @@ class PromptInjectionFilter:
          'justification_bypass'),
     ]
     
-    # =========================================================================
+
     # MEDIUM RISK PATTERNS - Allow with monitoring
-    # =========================================================================
     MEDIUM_RISK_PATTERNS = [
         # Suspicious markup
         (r'<[a-z_]+>[^<]*</[a-z_]+>',
@@ -203,9 +196,7 @@ class PromptInjectionFilter:
          'multi_step_attack'),
     ]
     
-    # =========================================================================
     # LOW RISK PATTERNS - Log only
-    # =========================================================================
     LOW_RISK_PATTERNS = [
         (r'(?i)(please\s+)?don\'?t\s+(tell|mention|say)',
          'mild_instruction'),
@@ -213,9 +204,7 @@ class PromptInjectionFilter:
          'format_request'),
     ]
     
-    # =========================================================================
     # MARITIME DOMAIN WHITELIST - Legitimate technical queries
-    # =========================================================================
     MARITIME_WHITELIST = [
         # Documentation types
         r'(?i)(maintenance|operating|installation|repair|service|safety)\s+'
@@ -249,9 +238,8 @@ class PromptInjectionFilter:
         r'(values?|specifications?|limits?|range)',
     ]
     
-    # =========================================================================
+
     # UNICODE HOMOGLYPH DETECTION
-    # =========================================================================
     HOMOGLYPH_MAP = {
         # Cyrillic lookalikes
         'а': 'a', 'е': 'e', 'і': 'i', 'о': 'o', 'р': 'p', 'с': 'c', 
@@ -362,10 +350,9 @@ class PromptInjectionFilter:
         # Check whitelist context first
         has_legitimate_context = self._check_whitelist(query)
         
-        # =====================================================================
-        # Pattern matching (in order of severity)
-        # =====================================================================
-        
+
+        # Pattern matching 
+
         # Critical patterns
         for pattern, name in self._critical:
             if pattern.search(normalized):
@@ -426,9 +413,8 @@ class PromptInjectionFilter:
                 if risk_level == RiskLevel.SAFE:
                     risk_level = RiskLevel.LOW
         
-        # =====================================================================
+
         # Heuristic checks
-        # =====================================================================
         
         # Length check
         if len(query) > self.max_query_length:
@@ -448,9 +434,8 @@ class PromptInjectionFilter:
             if risk_level == RiskLevel.SAFE:
                 risk_level = RiskLevel.LOW
         
-        # =====================================================================
+
         # Final decision
-        # =====================================================================
         
         is_safe = risk_level in (RiskLevel.SAFE, RiskLevel.LOW)
         
@@ -520,26 +505,38 @@ class PromptInjectionFilter:
         if total_letters == 0:
             return text
         
-        # Pure single-script text is fine (>90% one script)
+        # Pure single-script text is fine (>80% one script)
         cyrillic_ratio = cyrillic_count / total_letters
-        if cyrillic_ratio > 0.9:
-            return text  # Pure Cyrillic
-        if cyrillic_count == 0 and greek_count == 0:
-            return text  # Pure Latin
+        latin_ratio = latin_count / total_letters
         
-        # Mixed scripts detected - check for homoglyph characters
-        homoglyph_chars_found = sum(1 for c in text if c in self.HOMOGLYPH_MAP)
+        # Allow pure Cyrillic or pure Latin
+        if cyrillic_ratio > 0.8:
+            return text  # Pure Cyrillic (Russian, Ukrainian, etc.)
+        if latin_ratio > 0.95:
+            return text  # Pure Latin (no Cyrillic at all)
         
-        # If there are ANY homoglyphs in mixed-script text, normalize
-        if homoglyph_chars_found == 0:
-            return text
+        # For mixed-script text, check if Cyrillic forms complete words (legitimate bilingual)
+        # vs. Cyrillic characters mixed within Latin words (homoglyph attack)
+        words = text.split()
+        suspicious_words = []
         
-        # Normalize and return
-        result = []
-        for char in text:
-            result.append(self.HOMOGLYPH_MAP.get(char, char))
+        for word in words:
+            word_latin = sum(1 for c in word if 'a' <= c.lower() <= 'z')
+            word_cyrillic = sum(1 for c in word if '\u0400' <= c <= '\u04ff')
+            
+            # If a word has both Latin and Cyrillic (not pure word), it's suspicious
+            if word_latin > 0 and word_cyrillic > 0:
+                suspicious_words.append(word)
         
-        return ''.join(result)
+        # If we found mixed-script words, normalize them
+        if suspicious_words:
+            result = []
+            for char in text:
+                result.append(self.HOMOGLYPH_MAP.get(char, char))
+            return ''.join(result)
+        
+        # Otherwise it's legitimate bilingual text (whole words in each script)
+        return text
     
     def _check_whitelist(self, query: str) -> bool:
         """Check if query matches maritime domain whitelist."""
@@ -671,10 +668,6 @@ class PromptInjectionFilter:
         }
 
 
-# =============================================================================
-# INJECTION-RESISTANT SYSTEM PROMPT
-# =============================================================================
-
 INJECTION_RESISTANT_SYSTEM_PROMPT = """
 # CORE IDENTITY AND IMMUTABLE RESTRICTIONS
 
@@ -744,10 +737,6 @@ def get_protected_system_prompt() -> str:
     return INJECTION_RESISTANT_SYSTEM_PROMPT
 
 
-# =============================================================================
-# CONVENIENCE FUNCTIONS
-# =============================================================================
-
 # Module-level singleton for performance
 _default_filter: Optional[PromptInjectionFilter] = None
 
@@ -802,10 +791,6 @@ def quick_check(query: str) -> bool:
     """
     return get_default_filter().check_query(query).is_safe
 
-
-# =============================================================================
-# INTEGRATION HELPER FOR WORKFLOW
-# =============================================================================
 
 def create_input_guard(strict_mode: bool = True) -> callable:
     """
