@@ -1,0 +1,460 @@
+{
+  "systems": {
+    "fuel_oil": {
+      "code": "sys_fuel_oil",
+      "canonical": "Fuel Oil System",
+      "aliases": ["fuel system", "FO system", "fuel oil service", "fuel supply system"],
+      "keywords": ["fuel oil", "diesel oil", "heavy fuel", "marine diesel", "gas oil"],
+      "abbreviations": ["FO", "HFO", "MDO", "MGO", "DO", "LSFO", "VLSFO"],
+      "parent": null
+    },
+    "lubrication": {
+      "code": "sys_lubrication",
+      "canonical": "Lubrication Oil System",
+      "aliases": ["lube oil system", "LO system", "lubricating system"],
+      "keywords": ["lubricating oil", "lube oil", "cylinder oil", "system oil", "crankcase oil"],
+      "abbreviations": ["LO", "CLO", "SLO"],
+      "parent": null
+    },
+    "cooling_water": {
+      "code": "sys_cooling_water",
+      "canonical": "Cooling Water System",
+      "aliases": ["cooling system", "CW system", "jacket cooling"],
+      "keywords": ["cooling water", "jacket water", "fresh water cooling"],
+      "abbreviations": ["CW", "JCW", "HTCW", "LTCW"],
+      "parent": null
+    },
+    "sea_water": {
+      "code": "sys_sea_water",
+      "canonical": "Sea Water System",
+      "aliases": ["SW system", "seawater cooling", "salt water system"],
+      "keywords": ["sea water", "seawater", "salt water"],
+      "abbreviations": ["SW"],
+      "parent": null
+    },
+    "fresh_water": {
+      "code": "sys_fresh_water",
+      "canonical": "Fresh Water System",
+      "aliases": ["FW system", "potable water", "domestic water"],
+      "keywords": ["fresh water", "potable water", "drinking water", "domestic water"],
+      "abbreviations": ["FW", "DW"],
+      "parent": null
+    },
+    "compressed_air": {
+      "code": "sys_compressed_air",
+      "canonical": "Compressed Air System",
+      "aliases": ["air system", "starting air", "control air", "service air"],
+      "keywords": ["compressed air", "starting air", "control air", "instrument air", "service air", "working air"],
+      "abbreviations": ["CA", "SA", "IA"],
+      "parent": null
+    },
+    "steam": {
+      "code": "sys_steam",
+      "canonical": "Steam System",
+      "aliases": ["steam plant", "boiler system", "steam generation"],
+      "keywords": ["steam", "boiler", "steam drum", "steam line", "exhaust gas boiler"],
+      "abbreviations": ["STM"],
+      "parent": null
+    },
+    "exhaust_gas": {
+      "code": "sys_exhaust_gas",
+      "canonical": "Exhaust Gas System",
+      "aliases": ["exhaust system", "flue gas system"],
+      "keywords": ["exhaust gas", "flue gas", "exhaust manifold", "turbocharger", "economizer"],
+      "abbreviations": ["EXH", "EG"],
+      "parent": null
+    },
+    "electrical": {
+      "code": "sys_electrical",
+      "canonical": "Electrical System",
+      "aliases": ["power system", "electric plant", "power distribution"],
+      "keywords": ["electrical", "power supply", "generator", "switchboard", "transformer", "motor"],
+      "abbreviations": ["ELEC", "PWR"],
+      "parent": null
+    },
+    "hydraulic": {
+      "code": "sys_hydraulic",
+      "canonical": "Hydraulic System",
+      "aliases": ["hydraulics", "hydraulic power unit"],
+      "keywords": ["hydraulic", "hydraulic oil", "hydraulic power", "HPU"],
+      "abbreviations": ["HYD", "HPU"],
+      "parent": null
+    },
+    "bilge": {
+      "code": "sys_bilge",
+      "canonical": "Bilge System",
+      "aliases": ["bilge water system", "bilge pumping"],
+      "keywords": ["bilge", "bilge water", "bilge well", "oily water"],
+      "abbreviations": ["BLG"],
+      "parent": null
+    },
+    "ballast": {
+      "code": "sys_ballast",
+      "canonical": "Ballast System",
+      "aliases": ["ballast water system", "ballast tanks"],
+      "keywords": ["ballast", "ballast water", "ballast tank", "deballasting"],
+      "abbreviations": ["BW", "BLST"],
+      "parent": null
+    },
+    "sewage": {
+      "code": "sys_sewage",
+      "canonical": "Sewage Treatment System",
+      "aliases": ["sewage system", "black water system", "sanitary system"],
+      "keywords": ["sewage", "black water", "sanitary", "waste water", "sewage treatment"],
+      "abbreviations": ["SWG"],
+      "parent": null
+    },
+    "fire_fighting": {
+      "code": "sys_fire_fighting",
+      "canonical": "Fire Fighting System",
+      "aliases": ["fire system", "fire protection", "fire suppression"],
+      "keywords": ["fire fighting", "fire main", "fire pump", "CO2", "foam", "sprinkler", "fire extinguisher"],
+      "abbreviations": ["FF", "FFS"],
+      "parent": null
+    },
+    "ventilation": {
+      "code": "sys_ventilation",
+      "canonical": "Ventilation System",
+      "aliases": ["HVAC", "air conditioning", "vent system"],
+      "keywords": ["ventilation", "air conditioning", "HVAC", "exhaust fan", "supply fan", "air handling"],
+      "abbreviations": ["VENT", "AC", "HVAC"],
+      "parent": null
+    },
+    "inert_gas": {
+      "code": "sys_inert_gas",
+      "canonical": "Inert Gas System",
+      "aliases": ["IG system", "nitrogen system"],
+      "keywords": ["inert gas", "nitrogen", "IG plant", "tank inerting"],
+      "abbreviations": ["IG", "IGS", "N2"],
+      "parent": null
+    },
+    "cargo": {
+      "code": "sys_cargo",
+      "canonical": "Cargo System",
+      "aliases": ["cargo handling", "cargo pumping"],
+      "keywords": ["cargo", "cargo oil", "cargo tank", "cargo pump", "loading", "discharging"],
+      "abbreviations": ["CGO"],
+      "parent": null
+    },
+    "incinerator": {
+      "code": "sys_incinerator",
+      "canonical": "Incinerator System",
+      "aliases": ["waste incinerator", "garbage incinerator"],
+      "keywords": ["incinerator", "incineration", "waste burning", "sludge burning"],
+      "abbreviations": ["INC"],
+      "parent": null
+    },
+    "oily_water_separator": {
+      "code": "sys_ows",
+      "canonical": "Oily Water Separator System",
+      "aliases": ["OWS system", "oil water separator"],
+      "keywords": ["oily water separator", "oil content monitor", "15 ppm", "bilge separator"],
+      "abbreviations": ["OWS", "OCM"],
+      "parent": null
+    },
+    "steering": {
+      "code": "sys_steering",
+      "canonical": "Steering Gear System",
+      "aliases": ["steering system", "rudder system"],
+      "keywords": ["steering gear", "rudder", "steering pump", "helm"],
+      "abbreviations": ["STG"],
+      "parent": null
+    },
+    "propulsion": {
+      "code": "sys_propulsion",
+      "canonical": "Propulsion System",
+      "aliases": ["main propulsion", "propeller system"],
+      "keywords": ["propulsion", "main engine", "propeller", "shaft", "CPP", "FPP"],
+      "abbreviations": ["ME", "PROP"],
+      "parent": null
+    },
+    "fuel_oil_treatment": {
+      "code": "sys_fuel_treatment",
+      "canonical": "Fuel Oil Treatment System",
+      "aliases": ["fuel treatment", "fuel purification", "fuel cleaning"],
+      "keywords": ["fuel oil purifier", "fuel oil separator", "fuel cleaning", "centrifuge"],
+      "abbreviations": ["FTP"],
+      "parent": "fuel_oil"
+    },
+    "lube_oil_treatment": {
+      "code": "sys_lube_treatment",
+      "canonical": "Lube Oil Treatment System",
+      "aliases": ["lube oil purification", "oil cleaning"],
+      "keywords": ["lube oil purifier", "lube oil separator", "oil cleaning"],
+      "abbreviations": ["LTP"],
+      "parent": "lubrication"
+    },
+    "starting_air": {
+      "code": "sys_starting_air",
+      "canonical": "Starting Air System",
+      "aliases": ["main engine starting air", "ME starting air"],
+      "keywords": ["starting air bottle", "starting air compressor", "starting air valve"],
+      "abbreviations": ["SA"],
+      "parent": "compressed_air"
+    },
+    "control_air": {
+      "code": "sys_control_air",
+      "canonical": "Control Air System",
+      "aliases": ["instrument air", "pneumatic control"],
+      "keywords": ["control air", "instrument air", "pneumatic control", "air dryer"],
+      "abbreviations": ["CA", "IA"],
+      "parent": "compressed_air"
+    },
+    "fuel_oil_transfer": {
+      "code": "sys_fuel_transfer",
+      "canonical": "Fuel Oil Transfer System",
+      "aliases": ["fuel transfer", "fuel supply"],
+      "keywords": ["fuel oil transfer pump", "fuel supply pump", "fuel boosting"],
+      "abbreviations": ["FT"],
+      "parent": "fuel_oil"
+    },
+    "cooling_water_treatment": {
+      "code": "sys_cw_treatment",
+      "canonical": "Cooling Water Treatment System",
+      "aliases": ["water treatment", "chemical dosing"],
+      "keywords": ["chemical dosing", "corrosion inhibitor", "water treatment"],
+      "abbreviations": ["CWT"],
+      "parent": "cooling_water"
+    },
+    "jacket_cooling_water": {
+      "code": "sys_jacket_cooling",
+      "canonical": "Jacket Cooling Water System",
+      "aliases": ["jacket water", "HT cooling water", "engine cooling"],
+      "keywords": ["jacket cooling", "engine cooling", "high temperature cooling"],
+      "abbreviations": ["JCW", "HTCW"],
+      "parent": "cooling_water"
+    },
+    "central_cooling": {
+      "code": "sys_central_cooling",
+      "canonical": "Central Cooling System",
+      "aliases": ["LT cooling water", "low temperature cooling"],
+      "keywords": ["central cooling", "low temperature cooling", "plate cooler"],
+      "abbreviations": ["LTC", "LTCW"],
+      "parent": "cooling_water"
+    },
+    "emergency_generator": {
+      "code": "sys_emergency_gen",
+      "canonical": "Emergency Generator System",
+      "aliases": ["emergency power", "E/G"],
+      "keywords": ["emergency generator", "emergency diesel", "emergency power"],
+      "abbreviations": ["EG", "EDG"],
+      "parent": "electrical"
+    },
+    "main_switchboard": {
+      "code": "sys_main_switchboard",
+      "canonical": "Main Switchboard",
+      "aliases": ["MSB", "main distribution board"],
+      "keywords": ["main switchboard", "power distribution", "circuit breaker"],
+      "abbreviations": ["MSB", "MDB"],
+      "parent": "electrical"
+    },
+    "emergency_switchboard": {
+      "code": "sys_emergency_switchboard",
+      "canonical": "Emergency Switchboard",
+      "aliases": ["ESB", "emergency distribution"],
+      "keywords": ["emergency switchboard", "emergency distribution"],
+      "abbreviations": ["ESB", "EDB"],
+      "parent": "electrical"
+    }
+  },
+  "component_types": {
+    "pump": {
+      "patterns": ["pump", "pumping unit"]
+    },
+    "valve": {
+      "patterns": ["valve", "cock", "gate valve", "globe valve", "butterfly valve", "ball valve", "check valve"]
+    },
+    "tank": {
+      "patterns": ["tank", "storage tank", "service tank", "settling tank", "day tank"]
+    },
+    "filter": {
+      "patterns": ["filter", "strainer", "duplex filter", "auto filter"]
+    },
+    "separator": {
+      "patterns": ["separator", "purifier", "clarifier", "centrifuge"]
+    },
+    "heat_exchanger": {
+      "patterns": ["heat exchanger", "cooler", "heater", "preheater", "condenser", "evaporator"]
+    },
+    "compressor": {
+      "patterns": ["compressor", "air compressor"]
+    },
+    "blower": {
+      "patterns": ["blower", "fan", "exhaust fan", "supply fan", "ventilator"]
+    },
+    "boiler": {
+      "patterns": ["boiler", "auxiliary boiler", "exhaust gas boiler", "composite boiler"]
+    },
+    "generator": {
+      "patterns": ["generator", "diesel generator", "shaft generator", "emergency generator"]
+    },
+    "motor": {
+      "patterns": ["motor", "electric motor"]
+    },
+    "engine": {
+      "patterns": ["engine", "main engine", "auxiliary engine", "diesel engine"]
+    },
+    "turbocharger": {
+      "patterns": ["turbocharger", "turbo", "T/C"]
+    },
+    "governor": {
+      "patterns": ["governor", "speed governor"]
+    },
+    "injector": {
+      "patterns": ["injector", "fuel injector", "injection pump"]
+    },
+    "cylinder": {
+      "patterns": ["cylinder", "cylinder liner", "cylinder head", "cylinder cover"]
+    },
+    "piston": {
+      "patterns": ["piston", "piston ring", "piston crown"]
+    },
+    "bearing": {
+      "patterns": ["bearing", "main bearing", "crankpin bearing", "thrust bearing"]
+    },
+    "shaft": {
+      "patterns": ["shaft", "crankshaft", "camshaft", "propeller shaft", "intermediate shaft"]
+    },
+    "pipe": {
+      "patterns": ["pipe", "piping", "pipeline", "tube"]
+    },
+    "gauge": {
+      "patterns": ["gauge", "pressure gauge", "temperature gauge", "level gauge"]
+    },
+    "sensor": {
+      "patterns": ["sensor", "transmitter", "transducer", "detector"]
+    },
+    "switch": {
+      "patterns": ["switch", "pressure switch", "level switch", "limit switch"]
+    },
+    "control_panel": {
+      "patterns": ["control panel", "control box", "local panel", "main panel"]
+    },
+    "alarm": {
+      "patterns": ["alarm", "alarm panel", "monitoring system"]
+    },
+    "burner": {
+      "patterns": ["burner", "oil burner", "pilot burner"]
+    },
+    "nozzle": {
+      "patterns": ["nozzle", "spray nozzle", "fuel nozzle"]
+    },
+    "damper": {
+      "patterns": ["damper", "exhaust damper", "air damper"]
+    },
+    "purifier": {
+      "patterns": ["purifier", "oil purifier", "fuel purifier", "lube oil purifier"]
+    },
+    "clarifier": {
+      "patterns": ["clarifier", "oil clarifier"]
+    },
+    "preheater": {
+      "patterns": ["preheater", "oil preheater", "fuel preheater", "heating coil"]
+    },
+    "sump_tank": {
+      "patterns": ["sump tank", "sump", "drain tank", "collecting tank"]
+    },
+    "overflow_tank": {
+      "patterns": ["overflow tank", "expansion tank", "header tank"]
+    },
+    "air_bottle": {
+      "patterns": ["air bottle", "air receiver", "air reservoir", "compressed air bottle"]
+    },
+    "air_dryer": {
+      "patterns": ["air dryer", "desiccant dryer", "refrigerated dryer"]
+    },
+    "air_cooler": {
+      "patterns": ["air cooler", "intercooler", "aftercooler", "charge air cooler"]
+    },
+    "silencer": {
+      "patterns": ["silencer", "muffler", "exhaust silencer"]
+    },
+    "economizer": {
+      "patterns": ["economizer", "exhaust gas economizer", "waste heat recovery"]
+    },
+    "fresh_water_generator": {
+      "patterns": ["fresh water generator", "evaporator", "distiller", "FWG"]
+    },
+    "ballast_pump": {
+      "patterns": ["ballast pump", "ballast water pump", "stripping pump"]
+    },
+    "bilge_pump": {
+      "patterns": ["bilge pump", "emergency bilge pump"]
+    },
+    "fire_pump": {
+      "patterns": ["fire pump", "fire fighting pump", "emergency fire pump"]
+    },
+    "steering_gear_pump": {
+      "patterns": ["steering gear pump", "hydraulic pump", "steering pump"]
+    },
+    "rudder": {
+      "patterns": ["rudder", "steering rudder", "rudder stock"]
+    },
+    "rudder_actuator": {
+      "patterns": ["rudder actuator", "steering gear unit", "telemotor"]
+    },
+    "propeller": {
+      "patterns": ["propeller", "screw", "fixed pitch propeller", "controllable pitch propeller"]
+    },
+    "reduction_gearbox": {
+      "patterns": ["reduction gearbox", "gearbox", "reduction gear"]
+    },
+    "clutch": {
+      "patterns": ["clutch", "coupling", "jaw clutch", "fluid coupling"]
+    },
+    "thrust_bearing": {
+      "patterns": ["thrust bearing", "thrust block"]
+    },
+    "stern_tube": {
+      "patterns": ["stern tube", "tailshaft", "stern tube bearing"]
+    },
+    "incinerator_unit": {
+      "patterns": ["incinerator", "waste incinerator", "sludge incinerator"]
+    },
+    "waste_oil_tank": {
+      "patterns": ["waste oil tank", "sludge tank", "dirty oil tank"]
+    },
+    "settling_tank": {
+      "patterns": ["settling tank", "fuel settling tank", "service tank"]
+    },
+    "day_tank": {
+      "patterns": ["day tank", "daily service tank", "diesel oil day tank"]
+    },
+    "double_bottom_tank": {
+      "patterns": ["double bottom tank", "DB tank", "bottom tank"]
+    },
+    "deep_tank": {
+      "patterns": ["deep tank", "cargo tank", "wing tank"]
+    },
+    "expansion_vessel": {
+      "patterns": ["expansion vessel", "expansion tank", "pressurization unit"]
+    },
+    "dosing_pump": {
+      "patterns": ["dosing pump", "chemical pump", "metering pump"]
+    },
+    "ejector": {
+      "patterns": ["ejector", "steam ejector", "air ejector", "eductor"]
+    },
+    "non_return_valve": {
+      "patterns": ["non-return valve", "NRV", "check valve", "one-way valve"]
+    },
+    "relief_valve": {
+      "patterns": ["relief valve", "safety valve", "pressure relief valve", "PRV"]
+    },
+    "shut_off_valve": {
+      "patterns": ["shut-off valve", "isolation valve", "block valve"]
+    },
+    "control_valve": {
+      "patterns": ["control valve", "regulating valve", "throttle valve"]
+    },
+    "solenoid_valve": {
+      "patterns": ["solenoid valve", "electric valve", "pilot valve"]
+    },
+    "three_way_valve": {
+      "patterns": ["three-way valve", "3-way valve", "diverting valve", "changeover valve"]
+    },
+    "quick_closing_valve": {
+      "patterns": ["quick closing valve", "QCV", "emergency shut-off valve"]
+    }
+  }
+}
