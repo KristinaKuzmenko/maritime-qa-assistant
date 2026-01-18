@@ -14,16 +14,52 @@ from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable, Set
 from pathlib import Path
 import logging
 
-from services.embedding_service import EmbeddingService
-from services.schema_extractor import SchemaExtractor
-from services.layout_analyzer import LayoutAnalyzer, RegionType
-from services.table_extractor import TableExtractor
-from services.storage_service import StorageService
-from services.graph_service import Neo4jClient
-from services.vector_service import VectorService
-from services.region_classifier import RegionClassifier
-from services.smart_region_processor import SmartRegionProcessor
-from services.entity_extractor import get_entity_extractor, EntityExtractor
+# This module is executed in two modes:
+# - Script mode: `python backend/main.py` (imports resolve as `services.*`)
+# - Package mode: `pytest ...` (imports resolve as `backend.services.*`)
+#
+# Importing the same symbols through different module paths loads them twice,
+# breaking Enum identity comparisons (e.g. RegionType from `services.*` != RegionType from `backend.services.*`).
+try:
+    from .embedding_service import EmbeddingService
+    from .schema_extractor import SchemaExtractor
+    from .layout_analyzer import LayoutAnalyzer, RegionType, Region
+    from .table_extractor import TableExtractor
+    from .storage_service import StorageService
+    from .graph_service import Neo4jClient
+    from .vector_service import VectorService
+    from .region_classifier import RegionClassifier
+    from .smart_region_processor import SmartRegionProcessor
+    from .entity_extractor import get_entity_extractor, EntityExtractor
+    from ..core.config import Settings
+except ImportError:  # pragma: no cover
+    from services.embedding_service import EmbeddingService
+    from services.schema_extractor import SchemaExtractor
+    from services.layout_analyzer import LayoutAnalyzer, RegionType, Region
+    from services.table_extractor import TableExtractor
+    from services.storage_service import StorageService
+    from services.graph_service import Neo4jClient
+    from services.vector_service import VectorService
+    from services.region_classifier import RegionClassifier
+    from services.smart_region_processor import SmartRegionProcessor
+    from services.entity_extractor import get_entity_extractor, EntityExtractor
+    from core.config import Settings
+
+
+def _region_type_value(region_type: object) -> str:
+    """Stable lowercase region type string regardless of Enum identity (schema/table/text)."""
+    if region_type is None:
+        return ""
+    if isinstance(region_type, str):
+        return region_type.strip().lower()
+    value = getattr(region_type, "value", None)
+    if isinstance(value, str):
+        return value.strip().lower()
+    text = str(region_type).strip().lower()
+    # Enum fallback: 'RegionType.SCHEMA' -> 'schema'
+    if "." in text:
+        text = text.split(".")[-1]
+    return text
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +91,6 @@ class DocumentProcessor:
         llm_service = getattr(schema_extractor, 'llm_service', None)
         
         # Get vision detail settings from config
-        from core.config import Settings
         settings = Settings()
         
         self.region_classifier = RegionClassifier(
@@ -149,15 +184,18 @@ class DocumentProcessor:
         self._created_chapters = {}  # Reset chapter cache for new document
 
         try:
+            logger.info(f"[STEP 1/5] Calculating file hash for: {pdf_path}")
             file_hash = self._calculate_file_hash(pdf_path)
+            
+            logger.info(f"[STEP 2/5] Opening PDF with fitz...")
             doc = fitz.open(pdf_path)
             total_pages = len(doc)
+            logger.info(f"[STEP 2/5] PDF opened successfully: {total_pages} pages")
 
-            logger.info(f"Processing document: {pdf_path} ({total_pages} pages)")
-
+            logger.info(f"[STEP 3/5] Processing metadata...")
             owner = metadata.get("owner", "global")
-
             doc_title = metadata.get("title", Path(pdf_path).stem)
+            logger.info(f"[STEP 3/5] Metadata processed: title='{doc_title}', owner='{owner}'")
             
             doc_data = {
                 "id": doc_id,
@@ -177,11 +215,14 @@ class DocumentProcessor:
             self._current_doc_title = doc_title
 
             # Create document node in Neo4j
+            logger.info(f"Creating document node in Neo4j: {doc_id}")
             await self.graph.create_document(doc_data)
             logger.info(f"Created document node: {doc_id}")
 
             # Extract table of contents
+            logger.info(f"Extracting TOC from PDF...")
             toc = self._extract_toc(doc)
+            logger.info(f"TOC extraction complete: {len(toc)} entries")
 
             # Process document in chunks (for large documents)
             chunk_size = 50
@@ -408,13 +449,26 @@ class DocumentProcessor:
                 logger.debug(f"Filtered TOC entry (ends with number): '{title}'")
                 continue
             
-            # Re-determine level based on content (don't trust PDF metadata level)
-            adjusted_level = self._determine_toc_level(title)
+            # Re-determine level based on content, using PDF metadata level as hint
+            adjusted_level = self._determine_toc_level(title, pdf_level_hint=level)
             toc_entries.append({"level": adjusted_level, "title": title, "page": page})
         
         if toc_entries:
-            logger.info(f"Found {len(toc_entries)} TOC entries from PDF metadata (after filtering)")
-            return toc_entries
+            # Filter: keep only level 1 entries (chapters)
+            # Also exclude TOC meta-entries like "Contents", "Table of Contents", etc.
+            toc_meta_titles = ["contents", "table of contents", "index", "list of figures", "list of tables"]
+            chapter_entries = [
+                e for e in toc_entries 
+                if e["level"] == 1 and e["title"].strip().lower() not in toc_meta_titles
+            ]
+            
+            logger.info(
+                f"Found {len(toc_entries)} TOC entries from PDF metadata (after filtering), "
+                f"{len(chapter_entries)} are chapter-level (level 1)"
+            )
+            
+            # Return chapter entries if found, else all entries
+            return chapter_entries if chapter_entries else toc_entries
         
         # Scan ALL pages for TOC content (supports merged documents with TOC in middle)
         logger.info("No PDF TOC metadata, scanning all pages for table of contents...")
@@ -555,11 +609,15 @@ class DocumentProcessor:
         
         return entries
     
-    def _determine_toc_level(self, title: str) -> int:
+    def _determine_toc_level(self, title: str, pdf_level_hint: int = None) -> int:
         """
         Determine TOC entry level based on title format.
         Level 1 = Chapters (will create Chapter nodes)
         Level 2+ = Sections (will be detected from text, not TOC)
+        
+        Args:
+            title: TOC entry title
+            pdf_level_hint: Original level from PDF metadata (used as hint, not absolute truth)
         """
         title_upper = title.upper().strip()
         title_stripped = title.strip()
@@ -579,7 +637,7 @@ class DocumentProcessor:
             return 1
         
         # Level 1: ALL CAPS short title (likely major section)
-        if title_upper == title_stripped and len(title_stripped.split()) <= 5:
+        if title_stripped.isupper() and len(title_stripped.split()) <= 5:
             # But not if it starts with a number like "1.2 TITLE"
             if not re.match(r'^\d+\.', title_stripped):
                 return 1
@@ -599,7 +657,31 @@ class DocumentProcessor:
         if re.match(r'^[IVX]+[\.\s]', title_upper):
             return 1
         
-        return 2  # Default to level 2 (section)
+        # CRITICAL FIX: Many PDFs incorrectly mark chapters as level 2
+        # If PDF says level 1, trust it
+        if pdf_level_hint == 1:
+            return 1
+        
+        # If PDF says level 2 (but NOT level 3), and title has NO numbering, it's likely a chapter
+        # Examples: "Before First Startup", "Control Panel", "During Separation"
+        # (These are major sections without numbers, should be chapters)
+        # BUT: level 3 entries are subsections, keep them as-is
+        if pdf_level_hint == 2:
+            # Check if title looks like a chapter (no numbering, capitalized words)
+            if not num_match:  # No "1.2" style numbering
+                words = title_stripped.split()
+                # Single capitalized word >= 3 chars = chapter ("Stop", "Operating")
+                if len(words) == 1 and words[0][0].isupper() and len(words[0]) >= 3:
+                    return 1
+                # Multiple significant capitalized words = chapter
+                # (Ignore short words like "if", "in", "of", "the", "a", "an", "to")
+                significant_words = [w for w in words if len(w) >= 3]
+                cap_words = sum(1 for w in significant_words if w[0].isupper())
+                if cap_words >= 2:
+                    return 1
+        
+        # Default fallback to PDF metadata
+        return pdf_level_hint if pdf_level_hint and pdf_level_hint > 0 else 2
     
     def is_toc_page(self, page_num: int) -> bool:
         """Check if a page is a TOC page (should not extract tables from it)."""
@@ -671,9 +753,10 @@ class DocumentProcessor:
 
         logger.info(f"Processing pages {start_page+1} to {end_page}")
     
-        # Create default chapter if needed
-        if current_chapter_id is None and start_page == 0:
-            logger.info("No chapter found in TOC, creating default chapter")
+        # Create default chapter ONLY if TOC is completely empty
+        # If TOC has chapters but first page is before them, we'll assign chapter when we reach TOC page
+        if current_chapter_id is None and start_page == 0 and len(toc) == 0:
+            logger.info("TOC is empty, creating default chapter for entire document")
             default_title = doc.metadata.get("title") or "Document Content"
             current_chapter_id = await self._get_or_create_chapter(
                 doc_id=doc_id,
@@ -685,6 +768,8 @@ class DocumentProcessor:
             last_chapter_id = current_chapter_id
             self._current_chapter_id = current_chapter_id
             logger.info(f"Set default chapter: {current_chapter_id}")
+        elif current_chapter_id is None and len(toc) > 0:
+            logger.info(f"Pages before first TOC entry ({len(toc)} chapters in TOC), will assign chapter when reached")
 
         # Open pdfplumber for table extraction
         pl_doc = pdfplumber.open(doc.name)
@@ -712,21 +797,53 @@ class DocumentProcessor:
             # Segment page into TABLE, SCHEMA, TEXT regions using YOLO
             yolo_regions = self.layout_analyzer.analyze_page(page, page_num)
             
-            logger.debug(
-                f"Page {page_num + 1}: YOLO detected {len(yolo_regions)} regions"
+            logger.info(
+                f"🔍 Page {page_num + 1}: YOLO returned {len(yolo_regions)} regions, starting reclassification..."
             )
+            
+            # Debug: show YOLO region types BEFORE reclassification
+            yolo_types = [_region_type_value(r.region_type) for r in yolo_regions]
+            logger.info(f"🔍 Page {page_num + 1}: YOLO region types: {yolo_types}")
             
             # ===== STEP 2: Content-based Reclassification =====
             # Analyze region content to override YOLO when content signals are stronger
             reclassified_regions = []
             
-            for region in yolo_regions:
-                if region.region_type in [RegionType.TABLE, RegionType.SCHEMA]:
+            logger.info(f"🔄 Page {page_num + 1}: Starting reclassification loop for {len(yolo_regions)} regions")
+            
+            for i, region in enumerate(yolo_regions):
+                logger.info(
+                    f"🔄 Page {page_num + 1}: Loop iteration {i+1}/{len(yolo_regions)}, "
+                    f"region type: {_region_type_value(region.region_type)}"
+                )
+                logger.debug(
+                    f"🔍 Checking region: type={region.region_type}, "
+                    f"in [TABLE,SCHEMA]={_region_type_value(region.region_type) in ('table', 'schema')}"
+                )
+                
+                if _region_type_value(region.region_type) in ("table", "schema"):
+                    logger.info(
+                        f"🔄 Page {page_num + 1}: Calling reclassify_region for {_region_type_value(region.region_type)}..."
+                    )
+                    
                     # Reclassify based on content analysis (with LLM verification)
                     new_type = await self.region_classifier.reclassify_region(page, region)
+
+                    # Normalize returned type to this module's RegionType to avoid downstream identity issues
+                    new_type_value = _region_type_value(new_type)
+                    if new_type_value == "schema":
+                        new_type = RegionType.SCHEMA
+                    elif new_type_value == "table":
+                        new_type = RegionType.TABLE
+                    elif new_type_value == "text":
+                        new_type = RegionType.TEXT
+                    
+                    logger.info(
+                        f"🔄 Page {page_num + 1}: YOLO {_region_type_value(region.region_type)} → RegionClassifier returned {new_type} "
+                        f"(type={type(new_type).__name__}, value={getattr(new_type, 'value', new_type)})"
+                    )
                     
                     # Create new region with reclassified type (preserve caption_text and yolo_class_id)
-                    from services.layout_analyzer import Region
                     reclassified_region = Region(
                         bbox=region.bbox,
                         region_type=new_type,
@@ -752,12 +869,36 @@ class DocumentProcessor:
             page_tables_list = []
             page_text_chunks_list = []  # For LLM-extracted text regions
             
+            # Count regions by type for logging
+            schema_regions = sum(1 for r in reclassified_regions if _region_type_value(r.region_type) == "schema")
+            table_regions = sum(1 for r in reclassified_regions if _region_type_value(r.region_type) == "table")
+            text_regions = sum(1 for r in reclassified_regions if _region_type_value(r.region_type) == "text")
+            
+            # Debug: show what types we actually have
+            actual_types = [_region_type_value(r.region_type) for r in reclassified_regions]
+            logger.info(f"📋 Page {page_num + 1}: Actual region types after reclassification: {actual_types}")
+            
+            logger.info(
+                f"Page {page_num + 1}: Processing {len(reclassified_regions)} regions "
+                f"(SCHEMA={schema_regions}, TABLE={table_regions}, TEXT={text_regions})"
+            )
+            
             safe_doc_id = self._sanitize(doc_id)
             
             # Skip table extraction on TOC pages (pdfplumber often misdetects TOC as tables)
             is_toc_page = self.is_toc_page(page_num)
             if is_toc_page:
-                logger.info(f"Page {page_num + 1}: Skipping table extraction (TOC page)")
+                logger.info(f"Page {page_num + 1}: Skipping table/schema extraction (TOC page)")
+            
+            # Verify smart_processor is initialized
+            if not hasattr(self, 'smart_processor') or self.smart_processor is None:
+                logger.error("❌ SmartRegionProcessor not initialized! Schema/table extraction will fail.")
+                # Continue with text extraction only
+                continue
+            
+            # Skip processing if no schema/table regions (only TEXT)
+            if schema_regions == 0 and table_regions == 0:
+                logger.debug(f"Page {page_num + 1}: No schema/table regions to process (TEXT only)")
             
             # Counters for unique ID generation (multiple schemas/tables per page)
             schema_counter = 0
@@ -765,26 +906,39 @@ class DocumentProcessor:
             
             for region in reclassified_regions:
                 # Skip TEXT regions - they're handled by regular text extraction
-                if region.region_type == RegionType.TEXT:
+                if _region_type_value(region.region_type) == "text":
                     logger.debug(f"Page {page_num + 1}: Skipping TEXT region (handled by text extraction)")
                     continue
                 
-                if region.region_type == RegionType.TABLE:
+                if _region_type_value(region.region_type) == "table":
                     # Skip tables on TOC pages
                     if is_toc_page:
                         continue
                     
                     # Try table extraction → fallback to LLM detection (TABLE/TEXT/DIAGRAM)
-                    result = await self.smart_processor.process_table_region(
-                        fitz_page=page,
-                        pl_page=pl_page,
-                        region=region,
-                        doc_id=doc_id,
-                        safe_doc_id=safe_doc_id,
-                        page_num=page_num,
-                        full_page_text=page_text,
-                        section_id=None,  # Will be linked later
-                    )
+                    try:
+                        result = await self.smart_processor.process_table_region(
+                            fitz_page=page,
+                            pl_page=pl_page,
+                            region=region,
+                            doc_id=doc_id,
+                            safe_doc_id=safe_doc_id,
+                            page_num=page_num,
+                            full_page_text=page_text,
+                            section_id=None,  # Will be linked later
+                        )
+                        logger.info(
+                            f"Page {page_num + 1}: TABLE region processed -> type='{result.get('type')}', "
+                            f"chunks={len(result.get('chunks', []))}"
+                        )
+                        if not result.get('chunks'):
+                            logger.warning(
+                                f"⚠️ Page {page_num + 1}: TABLE region returned NO chunks! "
+                                f"Type was '{result.get('type')}', may need LLM fallback check."
+                            )
+                    except Exception as e:
+                        logger.error(f"Page {page_num + 1}: Error processing TABLE region: {e}", exc_info=True)
+                        continue
                     
                     # Collect based on result type
                     if result['type'] == 'table':
@@ -797,20 +951,33 @@ class DocumentProcessor:
                         # Diagram/schema content
                         page_schemas_list.extend(result['chunks'])
                 
-                elif region.region_type == RegionType.SCHEMA:
+                elif _region_type_value(region.region_type) == "schema":
                     # Try table inside → always extract schema
-                    result = await self.smart_processor.process_schema_region(
-                        fitz_page=page,
-                        pl_page=pl_page,
-                        region=region,
-                        doc_id=doc_id,
-                        safe_doc_id=safe_doc_id,
-                        page_num=page_num,
-                        full_page_text=page_text,
-                        section_id=None,  # Will be linked later
-                        schema_idx=schema_counter,  # Unique index for this page
-                    )
-                    schema_counter += 1  # Increment for next schema on this page
+                    try:
+                        result = await self.smart_processor.process_schema_region(
+                            fitz_page=page,
+                            pl_page=pl_page,
+                            region=region,
+                            doc_id=doc_id,
+                            safe_doc_id=safe_doc_id,
+                            page_num=page_num,
+                            full_page_text=page_text,
+                            section_id=None,  # Will be linked later
+                            schema_idx=schema_counter,  # Unique index for this page
+                        )
+                        logger.info(
+                            f"Page {page_num + 1}: SCHEMA region processed -> type='{result.get('type')}', "
+                            f"chunks={len(result.get('chunks', []))}"
+                        )
+                        if not result.get('chunks'):
+                            logger.warning(
+                                f"⚠️ Page {page_num + 1}: SCHEMA region returned NO chunks! "
+                                f"Check SchemaExtractor logs for errors."
+                            )
+                        schema_counter += 1  # Increment for next schema on this page
+                    except Exception as e:
+                        logger.error(f"Page {page_num + 1}: Error processing SCHEMA region: {e}", exc_info=True)
+                        continue
                     
                     # Check if dual extraction is needed (schema + text from same bbox)
                     if region.extract_text_also:
@@ -947,7 +1114,9 @@ class DocumentProcessor:
                 page_to_chapter[page_num] = current_chapter_id
                 logger.debug(f"📖 Page {page_num + 1} → Chapter {current_chapter_id[:8]}")
             else:
-                logger.warning(f"⚠️ Page {page_num + 1} has NO current_chapter_id!")
+                # Page before first TOC chapter - skip detailed processing
+                logger.debug(f"⏭️ Page {page_num + 1} is before first chapter, skipping section extraction")
+                continue
         
             text = page.get_text()
             lines = text.split('\n')
@@ -1441,26 +1610,34 @@ The visual elements are processed separately and linked to this section for orga
         )
         
         # Index schema in Qdrant with enhanced context
-        if self.vector is not None:
+        if self.vector is None:
+            logger.error(f"❌ VectorService is None! Cannot index schema {schema_id} in Qdrant")
+            logger.error(f"   This means vector_service was not passed to DocumentProcessor.__init__")
+        else:
             embedding_text = schema_chunk["content"]  
             
+            logger.debug(f"Schema {schema_id}: embedding_text length = {len(embedding_text)}")
+            
             if embedding_text.strip():
-                await self.vector.add_schema_embedding(
-                    schema_id=schema_id,
-                    text=embedding_text,
-                    doc_id=doc_id,
-                    page=schema_chunk["page_number"],
-                    caption=caption,
-                    system_ids=schema_system_ids,
-                    entity_ids=schema_entity_ids,
-                    owner=owner,
-                )
-                
-                logger.info(f"✅ Indexed schema {schema_id} in Qdrant (page {schema_chunk['page_number']})")
+                try:
+                    await self.vector.add_schema_embedding(
+                        schema_id=schema_id,
+                        text=embedding_text,
+                        doc_id=doc_id,
+                        doc_title=self._current_doc_title,
+                        page=schema_chunk["page_number"],
+                        caption=caption,
+                        system_ids=schema_system_ids,
+                        entity_ids=schema_entity_ids,
+                        owner=owner,
+                    )
+                    
+                    logger.info(f"✅ Indexed schema {schema_id} in Qdrant (page {schema_chunk['page_number']}, {len(embedding_text)} chars)")
+                except Exception as e:
+                    logger.error(f"❌ Failed to index schema {schema_id} in Qdrant: {e}", exc_info=True)
             else:
                 logger.warning(f"⚠️ Schema {schema_id} has empty content, skipping Qdrant indexing")
-        else:
-            logger.warning(f"⚠️ VectorService is None, skipping Qdrant indexing for schema {schema_id}")
+                logger.warning(f"   content_length={len(embedding_text)}, caption='{caption[:100] if caption else 'None'}'")
 
 
     # -------------------------------------------------------------------------
@@ -1594,32 +1771,41 @@ The visual elements are processed separately and linked to this section for orga
             )
             
             # Index chunk in Qdrant
-            if self.vector is not None:
-                await self.vector.add_table_chunk(
-                    chunk_id=chunk_id,
-                    table_id=table_id,
-                    chunk_index=chunk_index,
-                    text=chunk_text,
-                    doc_id=doc_id,
-                    page=table_chunk["page_number"],
-                    table_title=metadata["title"],
-                    table_caption=metadata.get("caption", ""),
-                    rows=metadata["rows"],
-                    cols=metadata["cols"],
-                    total_chunks=len(table_chunks),
-                    system_ids=chunk_system_ids,
-                    entity_ids=chunk_entity_ids,
-                    owner=owner,
-                )
-                
-                logger.debug(
-                    f"Indexed TableChunk {chunk_id} in Qdrant "
-                    f"({chunk_index + 1}/{len(table_chunks)})"
-                )
+            if self.vector is None:
+                logger.error(f"❌ VectorService is None! Cannot index table chunk {chunk_id} in Qdrant")
+                logger.error(f"   This means vector_service was not passed to DocumentProcessor.__init__")
             else:
-                logger.warning(
-                    f"⚠️ VectorService is None, skipping Qdrant indexing for chunk {chunk_id}"
-                )
+                logger.debug(f"Table chunk {chunk_id}: text length = {len(chunk_text)}")
+                
+                if not chunk_text or not chunk_text.strip():
+                    logger.warning(f"⚠️ Table chunk {chunk_id} has empty content, skipping Qdrant indexing")
+                    logger.warning(f"   chunk_text_length={len(chunk_text) if chunk_text else 0}")
+                else:
+                    try:
+                        await self.vector.add_table_chunk(
+                            chunk_id=chunk_id,
+                            table_id=table_id,
+                            chunk_index=chunk_index,
+                            text=chunk_text,
+                            doc_id=doc_id,
+                            doc_title=self._current_doc_title,
+                            page=table_chunk["page_number"],
+                            table_title=metadata["title"],
+                            table_caption=metadata.get("caption", ""),
+                            rows=metadata["rows"],
+                            cols=metadata["cols"],
+                            total_chunks=len(table_chunks),
+                            system_ids=chunk_system_ids,
+                            entity_ids=chunk_entity_ids,
+                            owner=owner,
+                        )
+                        
+                        logger.info(
+                            f"✅ Indexed TableChunk {chunk_id} in Qdrant "
+                            f"({chunk_index + 1}/{len(table_chunks)}, {len(chunk_text)} chars)"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Failed to index table chunk {chunk_id} in Qdrant: {e}", exc_info=True)
 
     async def _process_table_chunk_from_smart_processor(
         self,
@@ -2809,11 +2995,12 @@ The visual elements are processed separately and linked to this section for orga
         :param page: PyMuPDF page object
         :param regions: List of Region objects (modified in-place)
         """
-        from services.layout_analyzer import RegionType
-        
         # Separate Caption regions (YOLO class 0) and Schema regions
-        caption_regions = [r for r in regions if r.yolo_class_id == 0 and r.region_type == RegionType.TEXT]
-        schema_regions = [r for r in regions if r.region_type == RegionType.SCHEMA]
+        caption_regions = [
+            r for r in regions
+            if r.yolo_class_id == 0 and _region_type_value(r.region_type) == "text"
+        ]
+        schema_regions = [r for r in regions if _region_type_value(r.region_type) == "schema"]
         
         if not caption_regions or not schema_regions:
             return

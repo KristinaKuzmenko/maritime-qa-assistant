@@ -81,6 +81,8 @@ class VectorService:
 
     def initialize_collections(self) -> None:
         """Create Qdrant collections if they do not exist."""
+        from qdrant_client.models import PayloadSchemaType
+        
         existing = {c.name for c in self.client.get_collections().collections}
 
         dim = settings.vector_dimension
@@ -93,6 +95,10 @@ class VectorService:
                 vectors_config=VectorParams(size=dim, distance=distance),
             )
             logger.info(f"Created collection: {self.text_collection}")
+        
+        # Create indexes for text_chunks (always, even if collection exists)
+        self._ensure_payload_index(self.text_collection, "doc_id", PayloadSchemaType.KEYWORD)
+        self._ensure_payload_index(self.text_collection, "section_id", PayloadSchemaType.KEYWORD)
 
         # NEW: Schemas collection (replaces figures_text)
         if self.schemas_collection not in existing:
@@ -101,6 +107,10 @@ class VectorService:
                 vectors_config=VectorParams(size=dim, distance=distance),
             )
             logger.info(f"Created collection: {self.schemas_collection}")
+        
+        # Create indexes for schemas
+        self._ensure_payload_index(self.schemas_collection, "doc_id", PayloadSchemaType.KEYWORD)
+        self._ensure_payload_index(self.schemas_collection, "schema_id", PayloadSchemaType.KEYWORD)
 
         # Tables collection for table chunks
         if self.tables_text_collection not in existing:
@@ -109,6 +119,26 @@ class VectorService:
                 vectors_config=VectorParams(size=dim, distance=distance),
             )
             logger.info(f"Created collection: {self.tables_text_collection}")
+        
+        # Create indexes for tables
+        self._ensure_payload_index(self.tables_text_collection, "doc_id", PayloadSchemaType.KEYWORD)
+        self._ensure_payload_index(self.tables_text_collection, "table_id", PayloadSchemaType.KEYWORD)
+    
+    def _ensure_payload_index(self, collection_name: str, field_name: str, field_schema) -> None:
+        """Ensure payload index exists for a field."""
+        try:
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            logger.info(f"✅ Created payload index: {collection_name}.{field_name}")
+        except Exception as e:
+            # Index might already exist, which is fine
+            if "already exists" in str(e).lower():
+                logger.debug(f"Index already exists: {collection_name}.{field_name}")
+            else:
+                logger.warning(f"Failed to create index {collection_name}.{field_name}: {e}")
 
     # -------------------------------------------------------------------------
     # Embeddings Helpers
@@ -272,14 +302,17 @@ class VectorService:
             },
         )
 
-        await asyncio.to_thread(
-            self.client.upsert,
-            collection_name=self.schemas_collection,
-            points=[point],
-            wait=True,
-        )
-        
-        logger.debug(f"Added schema embedding for {schema_id} ({len(text)} chars)")
+        try:
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.schemas_collection,
+                points=[point],
+                wait=True,
+            )
+            logger.debug(f"Added schema embedding for {schema_id} ({len(text)} chars)")
+        except Exception as e:
+            logger.error(f"❌ Failed to upsert schema {schema_id} to Qdrant: {e}", exc_info=True)
+            raise
 
     # -------------------------------------------------------------------------
     # Upsert Operations - Tables
@@ -363,17 +396,20 @@ class VectorService:
             payload=payload,
         )
 
-        await asyncio.to_thread(
-            self.client.upsert,
-            collection_name=self.tables_text_collection,
-            points=[point],
-            wait=True,
-        )
-        
-        logger.debug(
-            f"Added table chunk {chunk_index+1}/{total_chunks} "
-            f"for table {table_id} ({len(text)} chars)"
-        )
+        try:
+            await asyncio.to_thread(
+                self.client.upsert,
+                collection_name=self.tables_text_collection,
+                points=[point],
+                wait=True,
+            )
+            logger.debug(
+                f"Added table chunk {chunk_index+1}/{total_chunks} "
+                f"for table {table_id} ({len(text)} chars)"
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to upsert table chunk {chunk_id} to Qdrant: {e}", exc_info=True)
+            raise
 
     # -------------------------------------------------------------------------
     # Search Operations - Text

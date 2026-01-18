@@ -37,6 +37,11 @@ class Neo4jClient:
         self.driver = AsyncGraphDatabase.driver(
             self.uri,
             auth=(self.user, self.password),
+            max_connection_lifetime=3600,  # 1 hour - prevents stale connections
+            max_connection_pool_size=50,  # Allow more concurrent connections
+            connection_acquisition_timeout=60.0,  # Wait up to 60s for connection
+            connection_timeout=30.0,  # 30s socket timeout
+            keep_alive=True,  # Send periodic keepalive packets
         )
         await self.verify_connection()
         await self.create_constraints_and_indexes()
@@ -303,7 +308,7 @@ class Neo4jClient:
             
             raise ValueError(f"Chapter {chapter_id} not found in database")
         
-        logger.info(f"✅ Found chapter: {check_result[0]['title']} (number: {check_result[0]['number']})")
+        logger.info(f"✅ Found chapter: {check_result[0]['title']}")
         
         # Use provided section ID or generate one
         section_id = section_data.get("id")
@@ -1123,6 +1128,7 @@ class Neo4jClient:
         min_score: float = 0.5,
         include_content: bool = False,
         section_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Full-text search in sections using Neo4j BM25 index.
@@ -1134,12 +1140,15 @@ class Neo4jClient:
             min_score: Minimum Lucene score
             include_content: If True, return full section content
             section_ids: Optional list to filter/re-rank only specific sections
+            owner: Optional owner filter to restrict results to specific user's documents
         """
         where_clause = "score > $min_score"
         if section_ids:
             where_clause += " AND node.id IN $section_ids"
         if doc_id:
             where_clause += " AND node.doc_id = $doc_id"
+        if owner:
+            where_clause += " AND EXISTS { MATCH (d:Document {doc_id: node.doc_id, owner: $owner}) }"
         
         if include_content:
             cypher_query = f"""
@@ -1187,6 +1196,8 @@ class Neo4jClient:
             params["section_ids"] = section_ids
         if doc_id:
             params["doc_id"] = doc_id
+        if owner:
+            params["owner"] = owner
             
         return await self.run_query(cypher_query, params)
     
@@ -1627,10 +1638,11 @@ class Neo4jClient:
         return result[0] if result else {}
     
     async def get_all_documents(self, owner: Optional[str] = None) -> List[Dict]:
-        """Get all documents, optionally filtered by owner"""
+        """Get all documents, optionally filtered by owner (includes global documents)"""
         if owner:
             query = """
-            MATCH (d:Document {owner: $owner})
+            MATCH (d:Document)
+            WHERE d.owner = $owner OR d.owner = 'global'
             RETURN d.id AS id, d.title AS title, d.doc_type AS type,
                    d.status AS status, d.total_pages AS total_pages,
                    d.upload_date AS created_at, d.owner AS owner
@@ -1913,6 +1925,7 @@ class Neo4jClient:
         self,
         entity_ids: List[str],
         doc_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """
@@ -1922,8 +1935,10 @@ class Neo4jClient:
         query = """
         UNWIND $entity_ids AS eid
         MATCH (s:Section)-[:DESCRIBES]->(e:Entity {code: eid})
-        WHERE $doc_ids IS NULL OR s.doc_id IN $doc_ids
-        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
+        WHERE ($doc_ids IS NULL OR s.doc_id IN $doc_ids)
+        OPTIONAL MATCH (d:Document {id: s.doc_id})
+        WHERE $owner IS NULL OR d.owner = $owner OR d.owner = 'global'
+        OPTIONAL MATCH (d)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
         
         WITH s, e, d,
              CASE 
@@ -1953,6 +1968,7 @@ class Neo4jClient:
         return await self.run_query(query, {
             "entity_ids": entity_ids,
             "doc_ids": doc_ids,
+            "owner": owner,
             "limit": limit,
         })
     
@@ -1960,6 +1976,7 @@ class Neo4jClient:
         self,
         entity_ids: List[str],
         doc_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """
@@ -1969,10 +1986,13 @@ class Neo4jClient:
         query = """
         UNWIND $entity_ids AS eid
         MATCH (t:Table)-[:MENTIONS]->(e:Entity {code: eid})
-        WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
+        WHERE ($doc_ids IS NULL OR t.doc_id IN $doc_ids)
+        
+        OPTIONAL MATCH (d:Document {id: t.doc_id})
+        WHERE $owner IS NULL OR d.owner = $owner OR d.owner = 'global'
         
         OPTIONAL MATCH (s:Section)-[:CONTAINS_TABLE]->(t)
-        OPTIONAL MATCH (d:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
+        OPTIONAL MATCH (d)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s)
         
         WHERE s IS NOT NULL
         
@@ -1995,6 +2015,7 @@ class Neo4jClient:
         return await self.run_query(query, {
             "entity_ids": entity_ids,
             "doc_ids": doc_ids,
+            "owner": owner,
             "limit": limit,
         })
     
@@ -2002,16 +2023,19 @@ class Neo4jClient:
         self,
         table_ids: List[str],
         entity_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Fetch tables by IDs with optional entity filter."""
+        """Fetch tables by IDs with optional entity filter and owner filter."""
         query = """
         UNWIND $table_ids AS tid
         MATCH (t:Table {id: tid})
         OPTIONAL MATCH (d:Document)-[:HAS_TABLE]->(t)
+        WHERE $owner IS NULL OR d.owner = $owner OR d.owner = 'global'
         OPTIONAL MATCH (tc:TableChunk)-[:PART_OF]->(t)
         OPTIONAL MATCH (t)-[:MENTIONS]->(e:Entity)
         WHERE $entity_ids IS NULL OR e.code IN $entity_ids
         WITH t, d, collect(DISTINCT tc.text_preview) AS chunk_previews, collect(DISTINCT e.name) AS entity_names
+        WHERE d IS NOT NULL
         RETURN DISTINCT 
             t.id AS table_id,
             t.title AS table_title,
@@ -2030,20 +2054,24 @@ class Neo4jClient:
         return await self.run_query(query, {
             "table_ids": table_ids,
             "entity_ids": entity_ids,
+            "owner": owner,
         })
     
     async def find_tables_by_entity(
         self,
         entity_ids: List[str],
         doc_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         """Find tables via MENTIONS relationship."""
         query = """
         UNWIND $entity_ids AS eid
         MATCH (t:Table)-[:MENTIONS]->(e:Entity {code: eid})
-        WHERE $doc_ids IS NULL OR t.doc_id IN $doc_ids
-        OPTIONAL MATCH (d:Document)-[:HAS_TABLE]->(t)
+        WHERE ($doc_ids IS NULL OR t.doc_id IN $doc_ids)
+        OPTIONAL MATCH (d:Document {id: t.doc_id})
+        WHERE $owner IS NULL OR d.owner = $owner OR d.owner = 'global'
+        OPTIONAL MATCH (d)-[:HAS_TABLE]->(t)
         OPTIONAL MATCH (tc:TableChunk)-[:PART_OF]->(t)
         WITH e, t, d, collect(tc.text_preview) AS chunk_previews
         RETURN DISTINCT 
@@ -2066,6 +2094,7 @@ class Neo4jClient:
         return await self.run_query(query, {
             "entity_ids": entity_ids,
             "doc_ids": doc_ids,
+            "owner": owner,
             "limit": limit,
         })
     
@@ -2073,14 +2102,17 @@ class Neo4jClient:
         self,
         entity_ids: List[str],
         doc_ids: Optional[List[str]] = None,
+        owner: Optional[str] = None,
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         """Find schemas via DEPICTS relationship."""
         query = """
         UNWIND $entity_ids AS eid
         MATCH (sc:Schema)-[:DEPICTS]->(e:Entity {code: eid})
-        WHERE $doc_ids IS NULL OR sc.doc_id IN $doc_ids
-        OPTIONAL MATCH (d:Document)-[:HAS_SCHEMA]->(sc)
+        WHERE ($doc_ids IS NULL OR sc.doc_id IN $doc_ids)
+        OPTIONAL MATCH (d:Document {id: sc.doc_id})
+        WHERE $owner IS NULL OR d.owner = $owner OR d.owner = 'global'
+        OPTIONAL MATCH (d)-[:HAS_SCHEMA]->(sc)
         RETURN DISTINCT 
             sc.id AS schema_id,
             sc.title AS title,
@@ -2099,6 +2131,7 @@ class Neo4jClient:
         return await self.run_query(query, {
             "entity_ids": entity_ids,
             "doc_ids": doc_ids,
+            "owner": owner,
             "limit": limit,
         })
     

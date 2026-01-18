@@ -59,8 +59,6 @@ def has_tool_calls(message: AIMessage) -> bool:
     return len(tool_calls) > 0
 
 
-# GRAPH SCHEMA PROMPT
-
 GRAPH_SCHEMA_PROMPT = """
 You work with a Neo4j graph that describes maritime technical documentation.
 
@@ -171,6 +169,54 @@ class ToolContext:
         logger.debug(f"💾 Cached embedding for query: {query[:50]}...")
 
 
+def llm_invoke_with_retry(llm, messages, max_retries: int = 5, initial_delay: float = 3.0):
+    """
+    Invoke LLM with exponential backoff retry logic for rate limit errors.
+    
+    :param llm: LLM instance
+    :param messages: Messages to send
+    :param max_retries: Maximum number of retry attempts (default: 5)
+    :param initial_delay: Initial delay in seconds (default: 3.0, doubles each retry)
+    :return: LLM response
+    """
+    import time
+    from openai import RateLimitError
+    
+    delay = initial_delay
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            return llm.invoke(messages)
+        except RateLimitError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                # For Cerebras, use longer delays due to queue system
+                retry_delay = delay
+                logger.warning(
+                    f"⚠️ Rate limit hit (attempt {attempt + 1}/{max_retries}), "
+                    f"waiting {retry_delay:.1f}s before retry... "
+                    f"(Provider: {settings.llm_provider})"
+                )
+                time.sleep(retry_delay)
+                delay *= 2  # Exponential backoff: 3s → 6s → 12s → 24s → 48s
+            else:
+                logger.error(
+                    f"❌ Rate limit exceeded after {max_retries} attempts "
+                    f"(total wait: ~{(2**max_retries - 1) * initial_delay:.0f}s). "
+                    f"Provider: {settings.llm_provider}"
+                )
+                raise
+        except Exception as e:
+            # For other errors, don't retry
+            logger.error(f"❌ LLM invocation error: {e}")
+            raise
+    
+    # If we exhausted retries, raise the last error
+    if last_error:
+        raise last_error
+
+
 def get_llm_instance(temperature: float = 0):
     """
     Get LLM instance based on configured provider.
@@ -218,10 +264,8 @@ def get_llm_instance(temperature: float = 0):
 tool_ctx = ToolContext()
 
 
-# =============================================================================
-# HELPER: Load Known Entities from Neo4j (for entity hints)
-# =============================================================================
 
+#Load Known Entities from Neo4j (for entity hints)
 async def load_known_entities() -> List[str]:
     """
     Load all entity names AND codes from Neo4j graph for entity detection hints.
@@ -277,7 +321,7 @@ def find_entities_in_question(question: str, known_entities: List[str]) -> List[
         'valve', 'pump', 'filter', 'cooler', 'pipe', 'tank', 'sensor',
         'motor', 'fan', 'alarm', 'switch', 'gauge', 'system', 'unit',
         'cylinder', 'piston', 'bearing', 'seal', 'gasket', 'bolt',
-        'engine', 'turbocharger', 'compressor', 'generator', 'boiler'
+        'engine', 'compressor', 'generator', 'boiler', 'incinerator'
     }
     
     # Common maritime component patterns (detect even if not in known_entities)
@@ -290,14 +334,17 @@ def find_entities_in_question(question: str, known_entities: List[str]) -> List[
         r'\b(fuel\s+filter)\b',
         r'\b(fuel\s+oil\s+pump)\b',
         r'\b(lubricating\s+oil\s+pump)\b',
+        r'\b(lube\s+oil\s+pump)\b',
         r'\b(cooling\s+water\s+pump)\b',
         r'\b(sea\s+water\s+pump)\b',
+        r'\b(fresh\s+water\s+pump)\b',
         r'\b(stuffing\s+box)\b',
         r'\b(under[- ]?piston)\b',
         r'\b(piston\s+ring[s]?)\b',
         r'\b(cylinder\s+liner)\b',
         r'\b(cylinder\s+cover)\b',
         r'\b(cylinder\s+head)\b',
+        r'\b(cylinder\s+oil)\b',
         r'\b(main\s+bearing)\b',
         r'\b(crankpin\s+bearing)\b',
         r'\b(crosshead\s+bearing)\b',
@@ -311,6 +358,7 @@ def find_entities_in_question(question: str, known_entities: List[str]) -> List[
         r'\b(indicator\s+valve)\b',
         r'\b(safety\s+valve)\b',
         r'\b(relief\s+valve)\b',
+        r'\b(non[- ]?return\s+valve)\b',
         r'\b(fuel\s+injector)\b',
         r'\b(injection\s+valve)\b',
         r'\b(control\s+valve)\b',
@@ -319,6 +367,8 @@ def find_entities_in_question(question: str, known_entities: List[str]) -> List[
         r'\b(crankshaft)\b',
         r'\b(camshaft)\b',
         r'\b(chain\s+drive)\b',
+        r'\b(scavenge\s+air)\b',
+        r'\b(charge\s+air)\b',
     ]
     
     for pattern in component_patterns:
@@ -381,16 +431,14 @@ def find_entities_in_question(question: str, known_entities: List[str]) -> List[
     return found[:5]
 
 
-# =============================================================================
-# HELPER: Neo4j Fulltext Search (used by multiple tools)
-# =============================================================================
-
+# Neo4j Fulltext Search (used by multiple tools)
 async def neo4j_fulltext_search(
     search_term: str, 
     limit: int = 10, 
     min_score: float = 0.5,
     include_content: bool = False,
-    section_ids: Optional[List[str]] = None
+    section_ids: Optional[List[str]] = None,
+    owner: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Search/re-rank sections using Neo4j's precomputed fulltext index (BM25).
@@ -416,6 +464,7 @@ async def neo4j_fulltext_search(
             min_score=min_score,
             include_content=include_content,
             section_ids=section_ids,
+            owner=owner,
         )
     except Exception as e:
         logger.error(f"graph_client.search_sections_fulltext failed: {e}")
@@ -435,7 +484,7 @@ def qdrant_search_text(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         List of text chunks with section_id, doc_id, text_preview, page info
     """
     try:
-        # ⚡ OPTIMIZATION: Try cache first to avoid duplicate embedding API calls
+        # Try cache first to avoid duplicate embedding API calls
         query_vector = tool_ctx.get_cached_embedding(query)
         
         if query_vector is None:
@@ -450,12 +499,14 @@ def qdrant_search_text(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         filter_conditions = []
         if tool_ctx.owner:
             filter_conditions.append(
-                FieldCondition(key="owner", match=MatchValue(value=tool_ctx.owner))
+                FieldCondition(key="owner", match=MatchAny(any=[tool_ctx.owner, "global"]))
             )
+            logger.info(f"🔍 Qdrant filter: owner={tool_ctx.owner} OR global")
         if tool_ctx.doc_ids:
             filter_conditions.append(
                 FieldCondition(key="doc_id", match=MatchAny(any=tool_ctx.doc_ids))
             )
+            logger.info(f"🔍 Qdrant filter: doc_ids={tool_ctx.doc_ids}")
         
         qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
         
@@ -470,6 +521,11 @@ def qdrant_search_text(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         
         hits = []
         for hit in results:
+            # Log owner info for debugging
+            chunk_owner = hit.payload.get("owner", "NULL")
+            chunk_doc_id = hit.payload.get("doc_id")
+            logger.debug(f"  Found chunk: doc_id={chunk_doc_id}, owner={chunk_owner}, score={hit.score:.3f}")
+            
             hits.append({
                 "type": "text_chunk",
                 "score": float(hit.score),
@@ -488,6 +544,9 @@ def qdrant_search_text(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         
         logger.info(f"qdrant_search_text: found {len(hits)} chunks")
         if hits:
+            # Log doc_ids and owners of found chunks
+            docs_found = {(h.get('doc_id'), h.get('doc_title', 'Unknown')) for h in hits}
+            logger.info(f"  Chunks from documents: {docs_found}")
             scores = [f"{h['score']:.3f}" for h in hits[:5]]
             logger.debug(f"Top chunk scores: {scores}")
             pages_info = [(h.get('page_start'), h.get('section_title', '')[:50]) for h in hits[:3]]
@@ -512,7 +571,7 @@ def qdrant_search_tables(query: str, limit: int = 5) -> List[Dict[str, Any]]:
         List of table chunks with table_id, doc_id, text_preview, page info
     """
     try:
-        # ⚡ OPTIMIZATION: Try cache first to avoid duplicate embedding API calls
+        #Try cache first to avoid duplicate embedding API calls
         query_vector = tool_ctx.get_cached_embedding(query)
         
         if query_vector is None:
@@ -527,7 +586,7 @@ def qdrant_search_tables(query: str, limit: int = 5) -> List[Dict[str, Any]]:
         filter_conditions = []
         if tool_ctx.owner:
             filter_conditions.append(
-                FieldCondition(key="owner", match=MatchValue(value=tool_ctx.owner))
+                FieldCondition(key="owner", match=MatchAny(any=[tool_ctx.owner, "global"]))
             )
         if tool_ctx.doc_ids:
             filter_conditions.append(
@@ -585,7 +644,7 @@ def qdrant_search_schemas(query: str, limit: int = 5) -> List[Dict[str, Any]]:
         List of schemas with schema_id, doc_id, file_path, caption
     """
     try:
-        # ⚡ OPTIMIZATION: Try cache first to avoid duplicate embedding API calls
+        #Try cache first to avoid duplicate embedding API calls
         query_vector = tool_ctx.get_cached_embedding(query)
         
         if query_vector is None:
@@ -600,7 +659,7 @@ def qdrant_search_schemas(query: str, limit: int = 5) -> List[Dict[str, Any]]:
         filter_conditions = []
         if tool_ctx.owner:
             filter_conditions.append(
-                FieldCondition(key="owner", match=MatchValue(value=tool_ctx.owner))
+                FieldCondition(key="owner", match=MatchAny(any=[tool_ctx.owner, "global"]))
             )
         if tool_ctx.doc_ids:
             filter_conditions.append(
@@ -800,7 +859,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                     
                     search_term = " OR ".join(search_variations)
                     logger.info(f"neo4j_entity_search: fulltext search term: {search_term}")
-                    sections_data = await neo4j_fulltext_search(search_term, limit=5, min_score=0.5, include_content=True)
+                    sections_data = await neo4j_fulltext_search(search_term, limit=5, min_score=0.5, include_content=True, owner=tool_ctx.owner)
                     
                     if sections_data:
                         logger.info(f"neo4j_entity_search: fulltext found {len(sections_data)} sections for codes {equipment_codes}")
@@ -943,9 +1002,8 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 "message": "No maritime entities detected in query"
             }
         
-        # NO EXPANSION - use exact entity codes only
-        # Expansion causes pollution: "valve" → matches 50+ generic valve entities
-        # Keep only specific multi-word entities (e.g., "cut_cock" not "valve")
+
+        # Keep only specific multi-word entities 
         strict_ids = []
         for eid in entity_ids:
             parts = eid.split('_')
@@ -986,6 +1044,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
             section_records = await tool_ctx.graph_client.find_sections_by_entity(
                 entity_ids=strict_ids,
                 doc_ids=doc_ids_filter,
+                owner=tool_ctx.owner,
                 limit=10,
             )
             
@@ -1013,6 +1072,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 sections_via_table = await tool_ctx.graph_client.find_sections_via_table_mentions(
                     entity_ids=strict_ids,
                     doc_ids=doc_ids_filter,
+                    owner=tool_ctx.owner,
                     limit=10,
                 )
                 
@@ -1050,7 +1110,16 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                         tables_from_mentions = await tool_ctx.graph_client.fetch_tables_by_ids(
                             table_ids=table_ids_from_mentions,
                             entity_ids=strict_ids,
+                            owner=tool_ctx.owner,
                         )
+                        
+                        # Filter sections to only keep those whose tables passed owner filter
+                        valid_table_ids = {r["table_id"] for r in tables_from_mentions}
+                        results["sections"] = [
+                            s for s in results["sections"]
+                            if s.get("related_table_id") in valid_table_ids
+                        ]
+                        logger.info(f"   🔍 Filtered sections: {len(sections_via_table)} → {len(results['sections'])} (kept only sections with owner-matching tables)")
                         
                         results["tables"] = [
                             {
@@ -1080,6 +1149,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 table_records = await tool_ctx.graph_client.find_tables_by_entity(
                     entity_ids=strict_ids,
                     doc_ids=doc_ids_filter,
+                    owner=tool_ctx.owner,
                     limit=3,
                 )
                 
@@ -1107,6 +1177,7 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
                 schema_records = await tool_ctx.graph_client.find_schemas_by_entity(
                     entity_ids=strict_ids,
                     doc_ids=doc_ids_filter,
+                    owner=tool_ctx.owner,
                     limit=3,
                 )
                 
@@ -1152,6 +1223,8 @@ async def neo4j_entity_search(query: str, include_tables: bool = True, include_s
         logger.error(error_msg)
         return {"error": error_msg, "entities": [], "sections": [], "tables": [], "schemas": []}
 
+
+# BUILD WORKFLOW NODES AND TOOLS
 
 # Collect tools
 TOOLS = [qdrant_search_text, qdrant_search_tables, qdrant_search_schemas, neo4j_query, neo4j_entity_search]
@@ -1315,7 +1388,7 @@ def node_analyze_and_route(state: GraphState) -> GraphState:
     logger.info(f"📝 NEW QUESTION: {question}")
     logger.info(f"{'#'*60}\n")
     
-    # ⚡ Check if this is a follow-up question with confidence score
+    # Check if this is a follow-up question with confidence score
     is_followup, followup_confidence = is_followup_question(question, chat_history, state)
     original_question = question
     
@@ -1374,10 +1447,11 @@ FOLLOW-UP QUESTION: {question}
 INSTRUCTIONS:
 1. Identify what the follow-up question is referring to from the history.
 2. Include ALL relevant context: equipment names, technical terms, parameters, operating conditions.
-3. For "related tables/diagrams/figures" requests:
+3. For visual content requests ("related tables/diagrams/figures/pictures/images/schemas"):
    - Extract equipment/system names from previous Q&A
    - Include operating modes, conditions, parameters mentioned
    - Make query specific enough to find related content
+   - IMPORTANT: "pictures" = "schemas/diagrams" in maritime documentation context
 4. For pronoun references ("it", "this", "that", "это", "этот"):
    - Replace with concrete nouns from context
    - Preserve technical terminology
@@ -1388,7 +1462,7 @@ REWRITTEN QUESTION:"""
 
         try:
             llm = get_llm_instance(temperature=0)
-            rewrite_response = llm.invoke([HumanMessage(content=rewrite_prompt)])
+            rewrite_response = llm_invoke_with_retry(llm, [HumanMessage(content=rewrite_prompt)])
             rewritten_question = rewrite_response.content.strip()
 
             # Validate rewritten question
@@ -1404,7 +1478,7 @@ REWRITTEN QUESTION:"""
     
     state["is_followup"] = is_followup
     
-    # ⚡ Clear embedding cache for new query
+    # Clear embedding cache for new query
     tool_ctx.clear_embedding_cache()
     
     # Ensure entities are loaded (lazy initialization on first call)
@@ -1460,7 +1534,7 @@ ALSO call qdrant_search_* for semantic context."""
         logger.info(f"🔍 Detected ALL-SECTIONS query with validated entities: {validated_entities[:3]}")
         entity_hint = f"""
 
-🔍 DETECTED COMPONENTS IN GRAPH: {', '.join(validated_entities[:5])}
+DETECTED COMPONENTS IN GRAPH: {', '.join(validated_entities[:5])}
 
 This is an "all sections/references" type query and these components exist in the knowledge graph.
 You SHOULD use neo4j_entity_search to find all documentation sections about these components.
@@ -1477,7 +1551,7 @@ ALSO call qdrant_search_* for semantic context."""
         logger.info(f"📍 Detected ALL-SECTIONS query with entities (not in graph): {found_entities[:3]}")
         entity_hint = f"""
 
-📍 DETECTED COMPONENTS: {', '.join(found_entities[:5])}
+DETECTED COMPONENTS: {', '.join(found_entities[:5])}
 
 These components are not in the knowledge graph. Use semantic search (qdrant_search_*) for best results."""
     elif validated_entities and not is_all_sections_query:
@@ -1485,7 +1559,7 @@ These components are not in the knowledge graph. Use semantic search (qdrant_sea
         logger.info(f"📍 Detected named components (standard query): {validated_entities[:3]}")
         entity_hint = f"""
 
-📍 DETECTED NAMED COMPONENTS: {', '.join(validated_entities[:5])}
+DETECTED NAMED COMPONENTS: {', '.join(validated_entities[:5])}
 
 These components exist in the knowledge graph. You SHOULD use neo4j_entity_search 
 to retrieve structured documentation about these specific components.
@@ -1502,13 +1576,13 @@ ALSO call qdrant_search_* for additional semantic context."""
         logger.info(f"📍 Detected components (not in graph): {found_entities[:3]}")
         entity_hint = f"""
 
-📍 DETECTED COMPONENTS: {', '.join(found_entities[:5])}
+DETECTED COMPONENTS: {', '.join(found_entities[:5])}
 
 These components are not in the knowledge graph. Use semantic search (qdrant_search_*) for best results."""
     else:
         entity_hint = """
 
-📍 No specific equipment entities detected.
+No specific equipment entities detected.
 → Use semantic search (qdrant_search_*) for best results."""
     
     # Build unified system prompt that includes BOTH intent classification AND tool selection
@@ -1530,10 +1604,11 @@ STEP 1: INTENT CLASSIFICATION
 |--------|--------------|------------------|
 | text | Explanation/answer in prose | "how", "what", "why", "explain", troubleshooting symptoms |
 | table | To SEE a table displayed | "show table", "specs", "parameters", "specifications" |
-| schema | To SEE a diagram displayed | "diagram", "schematic", "drawing", "show figure" |
+| schema | To SEE a diagram displayed | "diagram", "schematic", "drawing", "show figure", "picture", "image" |
 | mixed | To SEE BOTH table AND diagram | "specs and diagram", "table with schematic" |
 
-⚠️ Troubleshooting questions ("no suction", "failure", "alarm") → intent="text"
+IMPORTANT: "picture"/"pictures"/"image" = schema/diagram in maritime documentation
+Troubleshooting questions ("no suction", "failure", "alarm") → intent="text"
    (user wants explanation, even if data comes from table)
 
 ═══════════════════════════════════════════════════════════════════════
@@ -1562,12 +1637,12 @@ DECISION TABLE:
 
 ² ENTITY TYPES for neo4j_entity_search:
 
-  ✅ USE FOR:
+USE FOR:
   - Equipment CODES: PU3, HGM-30, PT-6018, CR-302, SV4 (alphanumeric IDs)
   - Named components (2+ words): "Fuel Oil Pump", "Isolation Valve", "HFO Cooler"
   - Location queries: "where is X located", "which sections mention X"
 
-  ❌ DO NOT USE FOR:
+DO NOT USE FOR:
   - Generic single nouns: pump, valve, burner, incinerator, chamber
   - Why: generic terms → 100+ matches → context pollution (F1=0.11)
   
@@ -1596,7 +1671,7 @@ DECISION TABLE:
   - "whole chapter", "all content from section"
   - "context around", "related sections"
 
-  ⚠️ NOT for semantic search — Neo4j is for structure, Qdrant is for content.
+NOT for semantic search — Neo4j is for structure, Qdrant is for content.
 ═══════════════════════════════════════════════════════════════════════
 EXAMPLES
 ═══════════════════════════════════════════════════════════════════════
@@ -1610,6 +1685,9 @@ Q: "The pump has no suction. What can be the cause?"
 Q: "Show me the cooling system diagram"
 → schema | ["qdrant_search_schemas"]
 
+Q: "Show picture of fuel system"
+→ schema | ["qdrant_search_schemas"]
+
 Q: "How does the fuel injection system work?"
 → text | ["qdrant_search_text"]
 
@@ -1621,6 +1699,9 @@ Q: "Show diagram and specifications of Fuel Oil Pump"
 
 Q: "Explain the diagram of cooling system"
 → schema | ["qdrant_search_schemas", "qdrant_search_text"]
+
+Q: "Show pictures of piston assembly"
+→ schema | ["qdrant_search_schemas"]
 
 Q: "Show me the full section containing this table"
 → text | ["neo4j_query"]
@@ -1722,8 +1803,11 @@ Only decompose if parts are truly independent. Skip if parts are related aspects
         'related tables', 'show me related tables', 'show related tables', 'more tables', 'other tables',
         'related diagrams', 'show me diagrams', 'show diagrams', 'show schema', 'show figure',
         'more diagrams', 'other diagrams', 'related figures', 'show me figures',
+        'show picture', 'show pictures', 'show me picture', 'show me pictures', 'show image', 'show images',
+        'related pictures', 'more pictures', 'other pictures', 'any pictures', 'picture', 'pictures',
         'ещё таблицы', 'другие таблицы', 'связанные таблицы',
-        'покажи схемы', 'покажи диаграммы', 'есть схемы', 'есть диаграммы', 'связанные схемы'
+        'покажи схемы', 'покажи диаграммы', 'есть схемы', 'есть диаграммы', 'связанные схемы',
+        'покажи картинки', 'покажи картинку', 'есть картинки', 'покажи изображения'
     ]
     
     # Clear follow-up filters by default (only set them for specific visual follow-up queries)
@@ -1796,7 +1880,7 @@ Only decompose if parts are truly independent. Skip if parts are related aspects
     ]
     
     # Get structured response from LLM
-    response = llm.invoke(messages)
+    response = llm_invoke_with_retry(llm, messages)
     
     # Parse response content
     response_text = response.content.strip()
@@ -2225,7 +2309,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                         # Store in neo4j_results for potential use
                         neo4j_results.extend(table_mention_sections)
                     
-                    # ⚡ OPTIMIZED: Use Neo4j precomputed BM25 index instead of building BM25Okapi
+                    # Use Neo4j precomputed BM25 index instead of building BM25Okapi
                     regular_sections = [sec for sec in entity_sections if sec.get("found_via") != "table_mentions"]
                     
                     if regular_sections:
@@ -2260,13 +2344,14 @@ async def node_execute_tools(state: GraphState) -> GraphState:
                             # Get section IDs to re-rank
                             section_ids = [sec.get("section_id") for sec in regular_sections]
                             
-                            # ⚡ Use Neo4j fulltext index with section_ids filter for BM25 re-ranking
+                            # Use Neo4j fulltext index with section_ids filter for BM25 re-ranking
                             bm25_results = await neo4j_fulltext_search(
                                 search_term=lucene_query,
                                 section_ids=section_ids,  # Filter to only these sections
                                 limit=5,
                                 min_score=0.5,
-                                include_content=False
+                                include_content=False,
+                                owner=tool_ctx.owner
                             )
                             
                             if not bm25_results:
@@ -2518,6 +2603,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
     
     # RE-RANKING: Boost Qdrant results that match Neo4j entity sections
     # This implements "semantic search within entity-filtered sections"
+    # IMPORTANT: Boost is MODERATE (20%) to avoid overwhelming semantic search results
     if neo4j_results and (search_results["text"] or search_results["tables"]):
         neo4j_section_ids = {item.get("section_id") for item in neo4j_results if item.get("section_id")}
         
@@ -2526,7 +2612,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
             for chunk in search_results["text"]:
                 if chunk.get("section_id") in neo4j_section_ids:
                     original_score = chunk.get("score", 0)
-                    chunk["score"] = min(1.0, original_score * 1.5)  # 50% boost, cap at 1.0
+                    chunk["score"] = min(1.0, original_score * 1.2)  # 20% boost (reduced from 50%)
                     chunk["boosted"] = True
                     logger.debug(f"Boosted text chunk score: {original_score:.3f} → {chunk['score']:.3f}")
             
@@ -2534,7 +2620,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
             for table in search_results["tables"]:
                 if table.get("section_id") in neo4j_section_ids:
                     original_score = table.get("score", 0)
-                    table["score"] = min(1.0, original_score * 1.5)
+                    table["score"] = min(1.0, original_score * 1.2)  # 20% boost (reduced from 50%)
                     table["boosted"] = True
                     logger.debug(f"Boosted table score: {original_score:.3f} → {table['score']:.3f}")
             
@@ -2559,7 +2645,7 @@ async def node_execute_tools(state: GraphState) -> GraphState:
         try:
             # Use shared fulltext search function
             query = state["question"]
-            fulltext_results = await neo4j_fulltext_search(query, limit=3, min_score=0.5)
+            fulltext_results = await neo4j_fulltext_search(query, limit=3, min_score=0.5, owner=tool_ctx.owner)
             
             if fulltext_results:
                 logger.info(f"✅ Neo4j fulltext found {len(fulltext_results)} sections")
@@ -2704,9 +2790,10 @@ def _select_anchor_sections(text_hits: List[Dict[str, Any]], max_sections: int =
         # They can be: BM25 normalized (0-1), Lucene scores (unbounded), or fallback (0.2-0.3)
         # Always use fixed scoring for entity sections to avoid score confusion
         if source == "entity_search":
-            # Entity sections: moderate fixed score + importance boost
+            # Entity sections: LOWER fixed score to avoid overwhelming semantic search
             # Ignore raw_similarity (unreliable - could be BM25, Lucene, or fallback)
-            final_score = 0.5 + importance * 0.3  # Range: 0.5-0.65
+            # REDUCED: 0.3-0.5 range (was 0.5-0.65) to prioritize Qdrant semantic search
+            final_score = 0.3 + importance * 0.2  # Range: 0.3-0.5
             # Normalize similarity for display (clamp to 0-1 range)
             similarity = min(1.0, max(0.0, raw_similarity))
         else:
@@ -2954,18 +3041,24 @@ async def node_build_context(
         elif "schema_id" in record:
             neo4j_schemas.append(record)
     
-    # LIMIT Neo4j entity sections: keep top 3 by importance
+    # LIMIT Neo4j entity sections: keep top 2 by importance
+    # Entity sections are SUPPLEMENTARY to semantic search, not primary
     # Sort by score (importance from entity search or default 0.5)
     neo4j_sections.sort(key=lambda r: r.get("importance", r.get("score", 0.5)), reverse=True)
-    limited_sections = neo4j_sections[:3]  # Maximum 3 entity sections
+    limited_sections = neo4j_sections[:2]  # Maximum 2 entity sections (reduced from 3)
     
-    if len(neo4j_sections) > 3:
-        logger.info(f"⚠️ Neo4j entity sections limited: {len(neo4j_sections)} → 3 (kept highest importance)")
+    if len(neo4j_sections) > 2:
+        logger.info(f"⚠️  Neo4j entity sections limited: {len(neo4j_sections)} → 2 (kept highest importance)")
     
-    # Add limited sections
+    # Add limited sections with REDUCED score to avoid overwhelming semantic search
     for record in limited_sections:
         item = await _neo4j_record_to_text_chunk(driver, record)
         if item:
+            # CRITICAL: Reduce entity section scores to avoid overwhelming semantic search
+            # Entity sections are HINTS, not primary answers
+            original_score = item.get("score", 0.5)
+            item["score"] = min(0.5, original_score * 0.8)  # Cap at 0.5, reduce by 20%
+            item["entity_hint"] = True  # Mark for debugging
             enriched.append(item)
     
     # Add tables (already limited in entity search to 3)
@@ -3309,83 +3402,87 @@ async def _fetch_table_full(
     hit: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """
-    Fetch full table text from Neo4j.
+    Fetch full table text from Neo4j with automatic retry on connection errors.
     
     The Table node already stores the complete linearized table text in normalized_text field.
     No need to read CSV files or fetch chunks from Qdrant.
     """
-    async with driver.session() as session:
-        # Get table with full text
-        query = """
-        MATCH (t:Table {id: $table_id})
-        OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s:Section)-[:CONTAINS_TABLE]->(t)
-        RETURN 
-            t.id AS table_id,
-            t.title AS table_title,
-            t.caption AS caption,
-            t.page_number AS page,
-            t.rows AS rows,
-            t.cols AS cols,
-            t.file_path AS file_path,
-            t.normalized_text AS table_text,
-            t.doc_id AS doc_id,
-            doc.title AS doc_title,
-            s.title AS section_title
-        """
-        
-        result = await session.run(query, table_id=hit["table_id"])
-        record = await result.single()
-        
-        if not record:
-            logger.warning(f"Table not found in Neo4j: {hit.get('table_id')}")
-            # Fallback - use hit data (may come from entity_search with file_path)
+    async def execute_query():
+        async with driver.session() as session:
+            # Get table with full text
+            query = """
+            MATCH (t:Table {id: $table_id})
+            OPTIONAL MATCH (doc:Document)-[:HAS_CHAPTER]->(c:Chapter)-[:HAS_SECTION]->(s:Section)-[:CONTAINS_TABLE]->(t)
+            RETURN 
+                t.id AS table_id,
+                t.title AS table_title,
+                t.caption AS caption,
+                t.page_number AS page,
+                t.rows AS rows,
+                t.cols AS cols,
+                t.file_path AS file_path,
+                t.normalized_text AS table_text,
+                t.doc_id AS doc_id,
+                doc.title AS doc_title,
+                s.title AS section_title
+            """
+            
+            result = await session.run(query, table_id=hit["table_id"])
+            record = await result.single()
+            
+            if not record:
+                logger.warning(f"Table not found in Neo4j: {hit.get('table_id')}")
+                # Fallback - use hit data (may come from entity_search with file_path)
+                return {
+                    "type": "table_chunk",
+                    "table_id": hit.get("table_id"),
+                    "doc_id": hit.get("doc_id"),
+                    "doc_title": hit.get("doc_title", "Unknown"),
+                    "title": hit.get("table_title", ""),
+                    "caption": hit.get("table_caption", ""),
+                    "page": hit.get("page"),
+                    "file_path": hit.get("file_path"),
+                    "text": hit.get("text_preview", ""),
+                    "score": hit.get("score", 0),
+                    "source": hit.get("source"),
+                }
+            
+            # Get full table text from normalized_text field
+            combined_text = record.get("table_text") or ""
+            file_path = record.get("file_path") or hit.get("file_path")
+            
+            if not file_path:
+                logger.warning(f"Table {hit.get('table_id')} has no file_path in Neo4j or hit")
+            
+            if not combined_text:
+                logger.warning(f"⚠️ Table {hit['table_id']} has no normalized_text - table may be empty")
+            else:
+                # Log table text length and preview
+                preview = combined_text[:200].replace('\n', ' ')
+                logger.info(
+                    f"📊 Fetched table {hit['table_id']}: {len(combined_text)} chars, "
+                    f"{record['rows']}x{record['cols']}, preview: {preview}..."
+                )
+            
             return {
                 "type": "table_chunk",
-                "table_id": hit.get("table_id"),
-                "doc_id": hit.get("doc_id"),
-                "doc_title": hit.get("doc_title", "Unknown"),
-                "title": hit.get("table_title", ""),
-                "caption": hit.get("table_caption", ""),
-                "page": hit.get("page"),
-                "file_path": hit.get("file_path"),
-                "text": hit.get("text_preview", ""),
+                "table_id": record["table_id"],
+                "doc_id": record["doc_id"] or hit.get("doc_id"),
+                "doc_title": record.get("doc_title") or hit.get("doc_title", "Unknown"),
+                "section_title": record.get("section_title"),
+                "title": record["table_title"] or hit.get("table_title", ""),
+                "caption": record.get("caption") or hit.get("caption", ""),
+                "page": record["page"],
+                "rows": record["rows"],
+                "cols": record["cols"],
+                "file_path": file_path,
+                "text": combined_text,
                 "score": hit.get("score", 0),
                 "source": hit.get("source"),
             }
-        
-        # Get full table text from normalized_text field
-        combined_text = record.get("table_text") or ""
-        file_path = record.get("file_path") or hit.get("file_path")
-        
-        if not file_path:
-            logger.warning(f"Table {hit.get('table_id')} has no file_path in Neo4j or hit")
-        
-        if not combined_text:
-            logger.warning(f"⚠️ Table {hit['table_id']} has no normalized_text - table may be empty")
-        else:
-            # Log table text length and preview
-            preview = combined_text[:200].replace('\n', ' ')
-            logger.info(
-                f"📊 Fetched table {hit['table_id']}: {len(combined_text)} chars, "
-                f"{record['rows']}x{record['cols']}, preview: {preview}..."
-            )
-        
-        return {
-            "type": "table_chunk",
-            "table_id": record["table_id"],
-            "doc_id": record["doc_id"] or hit.get("doc_id"),
-            "doc_title": record.get("doc_title") or hit.get("doc_title", "Unknown"),
-            "section_title": record.get("section_title"),
-            "title": record["table_title"] or hit.get("table_title", ""),
-            "caption": record.get("caption") or hit.get("caption", ""),
-            "page": record["page"],
-            "rows": record["rows"],
-            "cols": record["cols"],
-            "file_path": file_path,
-            "text": combined_text,
-            "score": hit.get("score", 0),
-            "source": hit.get("source"),
-        }
+    
+    # Retry on SessionExpired or ServiceUnavailable
+    return await execute_query()
 
 
 async def _fetch_schema_full(
@@ -3658,7 +3755,8 @@ async def adaptive_fallback_search(
                     search_term=expanded_q,
                     limit=3,
                     min_score=0.4,  # Lower threshold
-                    include_content=True
+                    include_content=True,
+                    owner=tool_ctx.owner
                 )
                 
                 if fulltext_results:
@@ -4180,7 +4278,7 @@ async def node_llm_reasoning(state: GraphState) -> GraphState:
             tables_text += f"Complete table data:\n{table_text}\n\n"
     
     # System prompt with few-shot examples to reduce regeneration
-    system_prompt = """You are a marine technical documentation answer generator.
+    system_prompt = r"""You are a marine technical documentation answer generator.
 Your only role is to produce factual answers strictly derived from supplied documentation.
 
 ⚠️ ANTI-HALLUCINATION RULES:
@@ -4376,7 +4474,7 @@ General greetings → respond naturally without document context."""
     
     # Generate answer
     try:
-        resp = llm.invoke(messages)
+        resp = llm_invoke_with_retry(llm, messages)
         answer_text = resp.content if resp.content else ""
         
         # Log initial answer length for debugging
@@ -4567,7 +4665,7 @@ General greetings → respond naturally without document context."""
                     logger.info(f"   🔄 Regenerating with expanded context ({total_context_chars} chars, {len(messages)} messages, total: {total_messages_chars} chars)")
                     
                     try:
-                        resp = llm.invoke(messages)
+                        resp = llm_invoke_with_retry(llm, messages)
                         new_answer = resp.content if resp.content else ""
                         
                         # Defensive check: empty answer after regeneration
@@ -4713,7 +4811,7 @@ Provide ONLY the corrected answer text."""
         messages.append({"role": "user", "content": correction_prompt})
         
         # Regenerate
-        resp_regenerated = llm.invoke(messages)
+        resp_regenerated = llm_invoke_with_retry(llm, messages)
         new_answer = resp_regenerated.content
         
         # Defensive check: empty answer after intent regeneration
@@ -4999,7 +5097,7 @@ Provide ONLY the corrected answer text."""
             messages.append({"role": "user", "content": description_requirement_prompt})
             
             try:
-                resp_desc_regen = llm.invoke(messages)
+                resp_desc_regen = llm_invoke_with_retry(llm, messages)
                 answer_text_regen = resp_desc_regen.content
                 
                 # Check if regenerated answer is better
@@ -5041,7 +5139,7 @@ Provide ONLY the corrected answer text."""
             messages.append({"role": "user", "content": description_requirement_prompt})
             
             try:
-                resp_desc_regen = llm.invoke(messages)
+                resp_desc_regen = llm_invoke_with_retry(llm, messages)
                 answer_text_regen = resp_desc_regen.content
                 
                 # Check if regenerated answer is better
@@ -5076,7 +5174,7 @@ Provide ONLY the corrected answer text."""
             
             # Try regeneration
             try:
-                resp_table_regen = llm.invoke(messages)
+                resp_table_regen = llm_invoke_with_retry(llm, messages)
                 answer_text_regen = resp_table_regen.content
                 
                 # Re-parse table references

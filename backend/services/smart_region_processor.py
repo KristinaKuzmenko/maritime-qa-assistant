@@ -98,6 +98,10 @@ class SmartRegionProcessor:
         """
         chunks = []
         
+        logger.info(
+            f"📊 Page {page_num + 1}: Processing TABLE region (bbox: {region.bbox}, confidence: {region.confidence:.2f})"
+        )
+        
         # Try table extraction within bbox
         table_data = await self._extract_table_from_bbox(
             fitz_page=fitz_page,
@@ -255,9 +259,8 @@ class SmartRegionProcessor:
         chunks = []
         
         # YOLO already determined it's a SCHEMA - extract it directly
-        logger.debug(
-            f"SCHEMA region on page {page_num + 1}: "
-            f"extracting schema (YOLO confidence confirmed)"
+        logger.info(
+            f"🖼️ Page {page_num + 1}: Processing SCHEMA region (bbox: {region.bbox}, confidence: {region.confidence:.2f})"
         )
         
         schema_data = await self._extract_schema_from_region(
@@ -270,6 +273,15 @@ class SmartRegionProcessor:
             section_id=section_id,
             schema_idx=schema_idx,
         )
+        
+        if not schema_data:
+            logger.warning(
+                f"⚠️ Page {page_num + 1}: Schema extraction returned None! "
+                f"Region bbox: {region.bbox.to_dict()}, confidence: {region.confidence:.2f}. "
+                f"Possible reasons: too small, failed to render, or LLM classified as NOT_SCHEMA"
+            )
+        else:
+            logger.info(f"✅ Page {page_num + 1}: Schema extracted successfully (id: {schema_data.get('id')})")
         
         # Check if schema contains embedded table (legend, specs, etc.)
         # Common in technical schematics: P&ID + legend, circuit + specs

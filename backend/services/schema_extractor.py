@@ -255,9 +255,10 @@ class SchemaExtractor:
             or width < min_width
             or height < min_height
         ):
-            logger.debug(
-                f"Skipping tiny schema on page {page_num + 1}: "
-                f"area_ratio={area_ratio:.5f}, size={width:.1f}x{height:.1f}px, "
+            logger.info(
+                f"⏭️ Skipping tiny schema on page {page_num + 1}: "
+                f"area_ratio={area_ratio:.5f} (min: {min_area_ratio}), "
+                f"size={width:.1f}x{height:.1f}px (min: {min_width}x{min_height}), "
                 f"bbox={bbox.to_dict()}"
             )
             return None

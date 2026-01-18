@@ -56,7 +56,10 @@ class StorageService:
             # Handle None value from Optional[str] config
             self.s3_prefix = (kwargs.get('s3_prefix') or '').strip('/')
             
-            # Create session
+            # Create session with signature version 4
+            from botocore.config import Config
+            self.s3_config = Config(signature_version='s3v4')
+            
             self.session = aioboto3.Session(
                 aws_access_key_id=self.aws_access_key,
                 aws_secret_access_key=self.aws_secret_key,
@@ -229,10 +232,15 @@ class StorageService:
             # Extract key from HTTP URL
             file_path = file_path.split('/', 3)[-1]
         
+        # Add S3 prefix if configured (must match _save_s3 logic)
+        s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+        
+        logger.debug(f"Downloading from S3: s3://{self.bucket_name}/{s3_key}")
+        
         async with self.session.client('s3') as s3:
             response = await s3.get_object(
                 Bucket=self.bucket_name,
-                Key=file_path
+                Key=s3_key
             )
             content = await response['Body'].read()
         
@@ -254,12 +262,15 @@ class StorageService:
                     return True
                 return False
             else:
+                # Add S3 prefix if configured
+                s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+                
                 async with self.session.client('s3') as s3:
                     await s3.delete_object(
                         Bucket=self.bucket_name,
-                        Key=file_path
+                        Key=s3_key
                     )
-                logger.info(f"File deleted from S3: {file_path}")
+                logger.info(f"File deleted from S3: {s3_key}")
                 return True
         
         except Exception as e:
@@ -278,10 +289,13 @@ class StorageService:
                 full_path = self.base_path / file_path
                 return full_path.exists()
             else:
+                # Add S3 prefix if configured
+                s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
+                
                 async with self.session.client('s3') as s3:
                     await s3.head_object(
                         Bucket=self.bucket_name,
-                        Key=file_path
+                        Key=s3_key
                     )
                 return True
         except:
@@ -308,22 +322,30 @@ class StorageService:
                 # Generate presigned URL synchronously (for non-async contexts)
                 try:
                     import boto3
+                    from botocore.config import Config
+                    
+                    # Force signature version 4 (more secure and modern)
+                    config = Config(signature_version='s3v4')
+                    
                     s3_client = boto3.client(
                         's3',
                         aws_access_key_id=self.aws_access_key,
                         aws_secret_access_key=self.aws_secret_key,
-                        region_name=self.region
+                        region_name=self.region,
+                        config=config
                     )
                     url = s3_client.generate_presigned_url(
                         'get_object',
                         Params={'Bucket': self.bucket_name, 'Key': s3_key},
                         ExpiresIn=expiration
                     )
-                    # Check if URL has query parameters (AWS signature)
-                    has_signature = '?' in url and 'X-Amz' in url
+                    # Check if URL has query parameters (AWS signature v2 or v4)
+                    # v4: X-Amz-Algorithm, X-Amz-Signature
+                    # v2: AWSAccessKeyId, Signature
+                    has_signature = '?' in url and ('X-Amz' in url or 'Signature=' in url)
                     logger.info(f"✅ Presigned URL: {s3_key[:60]}... | Has signature: {has_signature}")
                     if not has_signature:
-                        logger.warning(f"⚠️ URL missing AWS signature! Full URL: {url[:150]}")
+                        logger.warning(f"⚠️ URL missing AWS signature! Full URL: {url}")
                     return url
                 except ImportError:
                     logger.error("❌ boto3 not installed! Install with: pip install boto3 aioboto3")
@@ -358,7 +380,7 @@ class StorageService:
         s3_key = f"{self.s3_prefix}/{file_path}" if self.s3_prefix else file_path
         
         try:
-            async with self.session.client('s3') as s3:
+            async with self.session.client('s3', config=self.s3_config) as s3:
                 url = await s3.generate_presigned_url(
                     'get_object',
                     Params={'Bucket': self.bucket_name, 'Key': s3_key},
@@ -376,12 +398,18 @@ class StorageService:
     
     async def delete_document_files(self, doc_id: str) -> int:
         """
-        Delete all files associated with a document.
+        Delete all files associated with a document (PDF, schemas, tables).
         
         :param doc_id: Document ID
         :return: Number of files deleted
         """
         deleted_count = 0
+        
+        # Delete PDF
+        pdf_path = f"uploads/{doc_id}.pdf"
+        if await self.delete_file(pdf_path):
+            deleted_count += 1
+            logger.info(f"Deleted PDF: {pdf_path}")
         
         # Delete schemas
         for subdir in ['original', 'thumbnail']:
@@ -400,7 +428,7 @@ class StorageService:
                     except:
                         pass
             else:
-                # S3: Add prefix and list/delete
+                # S3: list and delete all files under prefix
                 s3_prefix = f"{self.s3_prefix}/{prefix}" if self.s3_prefix else prefix
                 async with self.session.client('s3') as s3:
                     try:
@@ -417,7 +445,43 @@ class StorageService:
                                     )
                                     deleted_count += 1
                     except ClientError as e:
-                        logger.error(f"Error deleting S3 files: {e}")
+                        logger.error(f"Error deleting S3 schemas: {e}")
+        
+        # Delete tables
+        for subdir in ['original', 'thumbnail', 'csv']:
+            prefix = f"tables/{subdir}/{doc_id}/"
+            
+            if self.storage_type == "local":
+                dir_path = self.base_path / prefix
+                if dir_path.exists():
+                    for file_path in dir_path.rglob("*"):
+                        if file_path.is_file():
+                            file_path.unlink()
+                            deleted_count += 1
+                    # Remove empty directory
+                    try:
+                        dir_path.rmdir()
+                    except:
+                        pass
+            else:
+                # S3: list and delete all files under prefix
+                s3_prefix = f"{self.s3_prefix}/{prefix}" if self.s3_prefix else prefix
+                async with self.session.client('s3') as s3:
+                    try:
+                        paginator = s3.get_paginator('list_objects_v2')
+                        async for page in paginator.paginate(
+                            Bucket=self.bucket_name,
+                            Prefix=s3_prefix
+                        ):
+                            if 'Contents' in page:
+                                for obj in page['Contents']:
+                                    await s3.delete_object(
+                                        Bucket=self.bucket_name,
+                                        Key=obj['Key']
+                                    )
+                                    deleted_count += 1
+                    except ClientError as e:
+                        logger.error(f"Error deleting S3 tables: {e}")
         
         logger.info(f"Deleted {deleted_count} files for document {doc_id}")
         return deleted_count
