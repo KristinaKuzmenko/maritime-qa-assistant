@@ -16,6 +16,9 @@ data:
   S3_BACKUP_BUCKET: "maritime-qa-qdrant-backups"
   AWS_REGION: "us-east-1"
   
+  # DynamoDB configuration
+  DYNAMODB_USERS_TABLE: "dev-maritime-qa-users"
+  
   # Qdrant endpoint is provided via Kubernetes Secret (External Secrets / AWS Secrets Manager)
   # QDRANT_HOST / QDRANT_PORT / QDRANT_API_KEY / QDRANT_USE_HTTPS are expected from secret.
   
