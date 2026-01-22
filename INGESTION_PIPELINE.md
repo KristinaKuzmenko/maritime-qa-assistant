@@ -29,20 +29,30 @@ The Maritime QA Assistant uses a sophisticated multi-stage ingestion pipeline to
 ### Stage 1: Document Initialization
 
 **Workflow:**
-1. Calculate file hash for deduplication
+1. Calculate file hash for deduplication (SHA256)
 2. Open PDF with PyMuPDF (fitz)
 3. Extract document metadata (title, type, version, language, tags, owner)
 4. Create Document node in Neo4j
 5. **Extract and parse table of contents (TOC):**
-   - Extract TOC structure using PyMuPDF
-   - Parse hierarchical levels (chapters, sections, subsections)
+   - Extract TOC structure from PDF metadata (PyMuPDF `get_toc()`)
+   - Scan ALL pages for TOC headers (supports merged documents with TOC in middle)
+   - **Technical code filtering:** Filter out entries like "TITLE-2 Model (1)", "FIG-3 Diagram"
+   - **TOC page tracking:** Identify TOC pages to exclude from table extraction
+   - Parse hierarchical levels (level 1 = chapters only)
    - Map TOC entries to page numbers
-   - Create chapter boundaries from level-1 entries
-   - **Improvement:** Better handling of multi-level TOC structures
-6. Initialize tracking structures (page-to-section mapping, current chapter ID)
+   - Check next 5 pages for TOC continuation (dotted lines pattern)
+6. Initialize tracking structures:
+   - `_page_to_section_map`: Maps page numbers to section IDs
+   - `_current_chapter_id`: Tracks current chapter during processing
+   - `_created_chapters`: Cache to prevent duplicate chapter creation
+   - `_toc_pages`: Set of TOC page numbers to skip for table extraction
+   - `_current_doc_title`: Document title for chunk metadata
 
 **Output:**
 - Document node in Neo4j with metadata
+- TOC structure for chapter boundaries (level 1 entries only)
+- TOC page set for exclusion
+- Document title stored for chunk citations
 - TOC structure for chapter boundaries
 - Document title stored in `self._current_doc_title` for chunk metadata
 
@@ -59,10 +69,11 @@ Documents are processed in chunks (50 pages at a time) to handle large files eff
 **Process:**
 1. Convert PDF page to image
 2. Run YOLOv10 inference to detect regions
-3. Classify regions into: `TABLE`, `SCHEMA`, or `TEXT`
+3. Classify regions into: `TABLE`, `SCHEMA`, `TEXT`, or `CAPTION` (YOLO class 0)
 4. Extract bounding boxes and confidence scores
+5. **Caption linking:** Link YOLO Caption regions to nearest schemas (within 250px)
 
-**Output:** List of `Region` objects with initial YOLO predictions
+**Output:** List of `Region` objects with initial YOLO predictions and linked captions
 
 #### Step 2.2: LLM-Based Reclassification
 
@@ -140,18 +151,28 @@ YOLO confidence < 0.8?
    - Extract caption from surrounding text (±250px)
    - Build context from nearby paragraphs
    - **NEW:** LLM generates rich description and detects schema type
+   - **Dual extraction flag:** If LLM detects text content in SCHEMA bbox, sets `extract_text_also=True`
 
-2. **Embedded Table Detection**
+2. **Dual SCHEMA+TEXT Extraction**
+   - If `extract_text_also=True`: Extract text from SCHEMA bbox and append to page_text
+   - **Use case:** YOLO confidently classified as SCHEMA, but LLM detected significant text content
+   - **Benefit:** Captures both visual diagram AND text without losing either
+
+3. **Embedded Table Detection**
    - Check if schema contains embedded table (legend, specs, parameter table)
    - Common in P&ID diagrams, circuit diagrams with component lists
    - Attempt pdfplumber extraction within schema bbox
    
-3. **Dual Processing (if embedded table found)**
+4. **Hybrid Processing (if embedded table found)**
    - Extract schema as image with full context
    - Also extract embedded table as structured data
    - Create both schema chunk AND table chunk
-   - Link both to same section
+   - Link both to same section with `embedded_table_ids` in metadata
    - **Benefit:** Captures both visual diagram and structured data
+
+**TOC Page Handling:**
+- Tables on TOC pages are skipped (pdfplumber often misdetects TOC as tables)
+- TOC pages identified during TOC extraction in Stage 1
 
 **Fallback Chain Summary:**
 ```
@@ -176,10 +197,15 @@ SCHEMA region:
 #### Step 3.1: Chapter Detection
 
 **Process:**
-1. Check TOC for chapter markers at current page
-2. If chapter found (level 1 TOC entry):
+1. **TOC-based detection:** Check TOC for chapter markers at current page
+2. **Text-based detection (first 15 lines only):**
+   - Pattern 1: Explicit markers ("CHAPTER X", "PART X", "APPENDIX X")
+   - Pattern 2: Major divisions ("X.0 TITLE" format with substantial title)
+   - **Rationale:** Limit to first 15 lines to avoid detecting chapter references in TOC listings
+3. **Title matching:** If TOC entry not found by page number, match by title text
+4. If chapter found (level 1 TOC entry or text pattern):
    - Finalize any accumulated section
-   - Create new Chapter node in Neo4j
+   - Get or create chapter (prevents duplicates using `_created_chapters` cache)
    - Update `current_chapter_id`
    - Reset section accumulator
 
@@ -187,6 +213,13 @@ SCHEMA region:
 - ID (stable UUID from doc_id + title + page)
 - Number (extracted from title)
 - Title
+- Start page
+- Level
+
+**Duplicate Prevention:**
+- `_created_chapters` dict tracks created chapters by title
+- `_get_or_create_chapter` checks cache before Neo4j query
+- Prevents duplicate chapters from TOC + text pattern detection
 - Start page
 - Level
 
@@ -237,10 +270,27 @@ SCHEMA region:
    - Wait for next section
 2. If next section arrives:
    - Merge pending into current section
-   - Combine content with separator
    - Track merged section numbers
 3. If no next section (end of document):
    - Create standalone small section
+
+#### Visual Content Sections
+
+**Purpose:** Handle pages with schemas/tables but no text sections.
+
+**Detection:**
+- After processing all pages, identify pages with schemas/tables but no associated section
+- Group consecutive unmapped pages BY CHAPTER (prevents cross-chapter grouping)
+
+**Creation:**
+- Create "Visual Content (Pages X-Y)" sections for each group
+- Content: Descriptive text explaining the section contains visual elements
+- Link all schemas/tables from these pages to the Visual Content section
+
+**Benefit:** 
+- No orphaned schemas/tables without section linkage
+- Maintains hierarchical structure (Document → Chapter → Section → Schema/Table)
+- Respects chapter boundaries
 
 #### Section Creation
 
@@ -315,11 +365,17 @@ SCHEMA region:
 
 ---
 
-### Stage 6: Schema and Table Processing
+### Stage 6: Schema and Table Processing with Entity Extraction
 
-**Purpose:** Create graph nodes and vector embeddings for extracted schemas and tables.
+**Purpose:** Create graph nodes and vector embeddings for extracted schemas and tables, with entity extraction.
 
 **Timing:** After sections are created (deferred from Stage 2.3)
+
+**Visual Content Section Handling:**
+- Before processing schemas/tables, identify pages with visual content but no text sections
+- Group consecutive unmapped pages BY CHAPTER (respects chapter boundaries)
+- Create "Visual Content (Pages X-Y)" sections for each group
+- Ensures all schemas/tables have section linkage
 
 #### Schema Processing
 
@@ -476,11 +532,19 @@ SCHEMA region:
 
 ---
 
-### Stage 8: Entity Extraction and Linking
+### Stage 8: Schema and Table Processing with Entity Extraction
 
-**Purpose:** Extract maritime domain entities (systems, components, equipment codes) and create graph relationships for entity-based search.
+**Purpose:** Create graph nodes and vector embeddings for extracted schemas and tables, with entity extraction.
 
-**Note:** Entity extraction happens **during** Stages 5 and 6 (when creating text chunks, schemas, and tables), not as a separate stage.
+**Timing:** After sections are created in Stages 3-4, deferred from Stage 2.3
+
+**Visual Content Section Handling:**
+- Before processing schemas/tables, identify pages with visual content but no text sections
+- Group consecutive unmapped pages BY CHAPTER (respects chapter boundaries)
+- Create "Visual Content (Pages X-Y)" sections for each group
+- Ensures all schemas/tables have section linkage
+
+**Entity Extraction:** Happens during schema/table processing (inline), not as separate stage
 
 #### EntityExtractor Service
 
@@ -785,6 +849,154 @@ if pending_small_section:
 
 ---
 
+### 5. Smart Tag Generation
+
+**Problem:** Generic tags from captions/titles are not informative; need content-based tags.
+
+**Solution:** Content-specific tag generation strategy:
+
+**For SCHEMAS:**
+- Analyze **ONLY** LLM-generated summary (caption/title not informative enough)
+- Detect schema types: P&ID, electrical, hydraulic, flowchart, layout, assembly
+- Extract system tags: fuel-system, cooling-system, lubrication-system, etc.
+- Extract component tags: pump, valve, motor-engine, instrumentation
+
+**For TABLES:**
+- Analyze table **content** (CSV text) instead of caption
+- Detect table types: specifications, parts-list, parameters, maintenance, performance
+- Extract technical system/component tags from table cells
+
+**Optional LLM Tags:**
+- Can include tags generated by LLM vision model during extraction
+- Combined with rule-based content analysis for comprehensive tagging
+
+**Benefit:**
+- More accurate and specific tags than caption-based approach
+- Better search and filtering capabilities
+- Reflects actual content rather than potentially vague titles
+
+**Example:**
+```python
+# SCHEMA with LLM summary: "This P&ID shows the fuel oil system with main and standby pumps..."
+# Generated tags: ["diagram", "P&ID", "fuel-system", "pump"]
+
+# TABLE with CSV content: "Part No. | Description | Specification\nP-101 | Main Fuel Pump | 50 m³/h..."
+# Generated tags: ["table", "parts-list", "fuel-system", "pump"]
+```
+
+---
+
+### 6. Visual Content Sections for Orphaned Pages
+
+**Problem:** Some pages contain only schemas/tables without text sections, causing orphaned elements without section linkage.
+
+**Solution:** Automatic Visual Content section creation:
+
+**Detection:**
+- After processing all pages, identify pages with schemas/tables but no associated section
+- Track chapter assignment for each page during processing
+
+**Grouping:**
+- Group consecutive unmapped pages **BY CHAPTER** (prevents cross-chapter grouping)
+- Example: Pages 5-7 (Chapter 1) and pages 12-14 (Chapter 2) create 2 separate groups
+
+**Creation:**
+- Create "Visual Content (Pages X-Y)" section for each group
+- Assign to correct chapter based on page-to-chapter mapping
+- Add descriptive content explaining the section contains visual elements
+- Link all schemas/tables from these pages to the Visual Content section
+
+**Benefit:**
+- No orphaned schemas/tables without section linkage
+- Maintains complete hierarchical structure: Document → Chapter → Section → Schema/Table
+- Respects chapter boundaries (no cross-chapter sections)
+- Enables proper graph traversal and relationship queries
+
+**Example:**
+```
+Document: "Engine Manual"
+  Chapter 1: "System Overview" (pages 1-10)
+    Section 1.1: "Introduction" (page 1)
+    Visual Content (Pages 5-7): Links to 3 schemas + 2 tables
+  Chapter 2: "Specifications" (pages 11-20)
+    Visual Content (Pages 12-14): Links to 4 tables
+    Section 2.1: "Technical Data" (page 15)
+```
+
+---
+
+### 7. TOC Extraction with Technical Code Filtering
+
+**Problem:** PDF TOCs often contain technical codes, figure references, and diagram labels that should not be chapters.
+
+**Solution:** Multi-level filtering and validation:
+
+**Technical Code Filtering:**
+- Filter Pattern 1: `Code-Number` format (TITLE-2, 100L-1, FIG-3)
+  - Regex: `^[A-Z0-9]{2,}-\d+`
+  - Example: "TITLE-2 Model (1)" → filtered
+- Filter Pattern 2: Ends with `(1)`, `(2)` → figure/table references
+  - Regex: `\(\d+\)\s*$`
+  - Example: "Diagram (1)" → filtered
+
+**TOC Page Tracking:**
+- Identifies all TOC pages during extraction
+- Stores in `_toc_pages` set for reference
+- **Critical:** Tables on TOC pages are skipped (pdfplumber misdetects TOC as tables)
+
+**Merged Document Support:**
+- Scans **ALL** pages for TOC headers (not just first few pages)
+- Supports documents with TOC in middle or multiple TOCs
+- Checks TOC continuation on next 5 pages (dotted lines pattern)
+
+**Level Determination:**
+- Level 1 (Chapters): Explicit markers, ALL CAPS titles, single-digit numbering (1, 2, 3)
+- Level 2+ (Sections): Multi-level numbering (1.1, 1.2.3), will be detected from text
+
+**Benefit:**
+- Clean chapter structure without diagram labels cluttering TOC
+- Handles merged documents with multiple TOC sections
+- Prevents table extraction errors on TOC pages
+- Better structural accuracy
+
+---
+
+### 8. Chapter Detection Improvements
+
+**Problem:** Documents may have chapters not in TOC, or TOC page numbers may be offset.
+
+**Solution:** Multi-method chapter detection:
+
+**Method 1: TOC Page Number Matching**
+- Direct page number lookup in TOC entries
+- Fastest method for standard documents
+
+**Method 2: TOC Title Matching**
+- If page number mismatch, search for TOC title text on page
+- Checks first 15 lines of page content
+- Handles merged documents with page number offsets
+
+**Method 3: Text Pattern Detection (First 15 Lines Only)**
+- Pattern 1: Explicit chapter markers (CHAPTER X, PART X, APPENDIX X)
+- Pattern 2: Major divisions with X.0 format
+  - Example: "3.0 INSTALLATION INSTRUCTIONS"
+  - Requires substantial title (≥15 chars, ≥2 words)
+  - Prevents false positives from "1.0" in equations/references
+- **Rationale:** Limit to first 15 lines to avoid detecting chapter references in body text
+
+**Duplicate Prevention:**
+- `_created_chapters` cache tracks chapters by title
+- `_get_or_create_chapter` checks cache before Neo4j query
+- Prevents duplicate chapters from TOC + text pattern detection
+
+**Benefit:**
+- Robust chapter detection across document formats
+- Handles TOC inaccuracies and merged documents
+- No duplicate chapters from multiple detection methods
+- Maintains stable chapter IDs across re-ingestion
+
+---
+
 
 ## Performance Characteristics
 
@@ -822,17 +1034,25 @@ Per document (~100 pages):
 ### Graceful Degradation
 
 **Document Structure:**
-- **No TOC found:** Create default chapter "Content"
-- **No sections found:** Create fallback section per chapter
+- **No TOC found:** Create default chapter from document title or "Document Content"
+- **No sections found in chapter:** Create fallback "Content" section for entire chapter
 - **Empty sections:** Merge with adjacent sections if < 200 chars
+- **Pages with schemas/tables but no sections:** Create "Visual Content (Pages X-Y)" sections grouped by chapter
 
 **Region Processing:**
-- **YOLO low confidence (<0.6):** Use LLM to verify and reclassify
+- **YOLO low confidence (<0.8):** Use LLM to verify and reclassify
 - **pdfplumber table extraction fails:** Fall back to LLM CSV extraction
 - **LLM table extraction fails:** Verify content type, extract as TEXT or SCHEMA
-- **Schema with embedded table:** Extract both as separate chunks
-- **Caption not found:** Expand search area, use OCR fallback
+- **Schema with embedded table:** Extract both as separate chunks with linking
+- **SCHEMA with text content:** Dual extraction (schema image + text) via `extract_text_also` flag
+- **Caption not found:** Expand search area to ±250px, use OCR fallback
+- **TOC pages:** Skip table extraction (pdfplumber misdetects TOC as tables)
 - **All extraction fails:** Log warning, skip region (non-critical)
+
+**Chapter Detection:**
+- **TOC page mismatch:** Fall back to title text matching on page content
+- **No TOC entry:** Detect chapters from text patterns (first 15 lines only)
+- **Duplicate chapters:** Prevented by `_created_chapters` cache
 
 **Entity Extraction:**
 - **No entities found:** Continue without entity relationships
@@ -859,9 +1079,14 @@ chunk_overlap_tokens = 100
 min_section_length = 200  # chars
 
 # Region Classification
-caption_search_distance = 250  # pixels
+caption_search_distance = 400  # pixels (updated from 250)
 yolo_confidence_threshold = 0.8  # Use LLM if below this
 llm_model = "gpt-4o-mini"  # For classification and schema analysis
+enable_llm_verification = True  # Enable LLM content verification
+
+# Vision Detail Settings (from config)
+vision_detail_tables = "high"  # or "low" for faster/cheaper processing
+vision_detail_schemas = "high"
 
 # Search Thresholds
 text_search_score_threshold = 0.2
@@ -870,6 +1095,12 @@ schema_search_score_threshold = 0.3
 
 # Neighbor Expansion
 neighbor_chunk_range = 1  # ±1 chunk
+
+# TOC Detection
+toc_max_continuation_pages = 5  # Check next N pages for TOC continuation
+
+# Chapter Detection
+chapter_text_search_lines = 15  # Only check first N lines for chapter headers
 ```
 
 ---

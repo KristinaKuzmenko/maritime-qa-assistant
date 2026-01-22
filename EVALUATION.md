@@ -63,7 +63,7 @@ Evaluation dataset (`evaluation.json`) should contain questions with ground trut
 
 **Tool Usage Analysis:**
 
-For each tool (qdrant_search_text, qdrant_search_tables, qdrant_search_schemas, neo4j_entity_search, neo4j_query):
+For each tool (qdrant_search_text, qdrant_search_tables, qdrant_search_schemas, neo4j_entity_search):
 - **Expected**: How many questions required this tool (from expected_tools in dataset)
 - **Used**: How many times agent actually called this tool
 - **Correct**: Intersection of expected and used
@@ -74,10 +74,10 @@ For each tool (qdrant_search_text, qdrant_search_tables, qdrant_search_schemas, 
 **Example:**
 ```
 qdrant_search_text:
-   Expected: 45, Used: 48, Correct: 43
-   Precision: 89.6%  (43/48 - agent didn't over-call)
-   Recall:    95.6%  (43/45 - agent didn't miss calls)
-   F1:        0.925
+   Expected: 59, Used: 57, Correct: 56
+   Precision: 98.2%  (56/57 - agent didn't over-call)
+   Recall:    94.9%  (56/59 - agent didn't miss calls)
+   F1:        0.966
 ```
 
 **Resource Inclusion Metrics:**
@@ -97,8 +97,15 @@ qdrant_search_text:
    - **Recall**: % of expected citations that were returned (strict penalty)
    - **F-beta (beta=2)**: Weighted harmonic mean favoring recall (2x importance)
    - **Soft penalty for extra citations**: Allows up to 50% extra citations without penalty
+     - Formula: `allowed_extra = max(1, int(len(expected_refs) * 0.5))`
+     - Example: If 4 citations expected, up to 2 extra allowed (6 total) without penalty
    - **Why F-beta**: Better to over-cite than under-cite; missing mandatory citations is critical
    - Matches citations by (doc_title, page) tuples
+   
+   **Edge Cases:**
+   - **No citations expected, none returned**: Perfect score (1.0, 1.0, 1.0)
+   - **No citations expected, but returned**: Partial precision penalty (0.5, 1.0, 0.67)
+   - **Citations expected, none returned**: CRITICAL FAILURE (0.0, 0.0, 0.0) - missing mandatory sources
 
 4. **Latency** (milliseconds)
    - **Average**: Mean response time across all questions
@@ -122,7 +129,6 @@ The evaluation pipeline analyzes metrics by question type:
 - **text**: Text-only questions (explanations, procedures)
 - **table**: Questions requiring table data (specs, troubleshooting)
 - **schema**: Questions requiring diagrams (visual representations)
-- **mixed**: Complex queries needing multiple sources
 
 **Metrics per type:**
 - Schema F1 average
@@ -132,17 +138,23 @@ The evaluation pipeline analyzes metrics by question type:
 
 **Example output:**
 ```
-Question Type: text (25 questions)
+Question Type: text (40 questions)
    Answer Rate:       100.0%
-   Schema F1:         0.950
-   Table F1:          0.850
-   Citation Accuracy: 0.780
+   Schema F1:         0.000
+   Table F1:          0.000
+   Citation Accuracy: 0.874
 
-Question Type: table (15 questions)
-   Answer Rate:       93.3%
-   Schema F1:         0.600
-   Table F1:          0.920
-   Citation Accuracy: 0.850
+Question Type: table (10 questions)
+   Answer Rate:       100.0%
+   Schema F1:         0.000
+   Table F1:          0.467
+   Citation Accuracy: 0.661
+
+Question Type: schema (12 questions)
+   Answer Rate:       100.0%
+   Schema F1:         0.736
+   Table F1:          0.000
+   Citation Accuracy: 0.782
 ```
 
 ---
@@ -186,85 +198,112 @@ Results are saved in JSON format:
 {
   "metadata": {
     "eval_dataset": "evaluation.json",
-    "num_examples": 60,
-    "owner": "test_owner",
-    "doc_ids": null,
-    "timestamp": "2025-01-12T10:30:00"
+    "num_examples": 62,
+    "owner": null,
+    "doc_ids": null
   },
   "custom_metrics": {
     "schema_inclusion": {
-      "precision": 0.95,
-      "recall": 0.90,
-      "f1": 0.92
+      "precision": 0.957,
+      "recall": 0.957,
+      "f1": 0.949
     },
     "table_inclusion": {
-      "precision": 0.88,
-      "recall": 0.85,
-      "f1": 0.86
+      "precision": 0.911,
+      "recall": 0.919,
+      "f1": 0.866
     },
     "citation_accuracy": {
-      "precision": 0.82,
-      "recall": 0.95,
-      "f1": 0.88
+      "precision": 0.898,
+      "recall": 0.829,
+      "f1": 0.822
     }
   },
   "latency_stats": {
-    "avg": 4250,
-    "median": 3800,
-    "p50": 3800,
-    "p95": 7200,
-    "p99": 9500,
-    "min": 1200,
-    "max": 12000
+    "avg": 7604,
+    "median": 2974,
+    "p50": 2988,
+    "p95": 61430,
+    "p99": 65859,
+    "min": 1803,
+    "max": 65859
   },
   "tool_analysis": {
     "tool_usage_count": {
-      "qdrant_search_text": 48,
+      "qdrant_search_text": 57,
+      "neo4j_entity_search": 23,
       "qdrant_search_tables": 22,
-      "qdrant_search_schemas": 18,
-      "neo4j_entity_search": 12,
-      "neo4j_query": 3
+      "qdrant_search_schemas": 13
     },
     "tool_metrics": {
       "qdrant_search_text": {
-        "expected": 45,
-        "used": 48,
-        "correct": 43,
-        "precision": 0.896,
-        "recall": 0.956,
-        "f1": 0.925
+        "expected": 59,
+        "used": 57,
+        "correct": 56,
+        "precision": 0.982,
+        "recall": 0.949,
+        "f1": 0.966
+      },
+      "neo4j_entity_search": {
+        "expected": 10,
+        "used": 23,
+        "correct": 7,
+        "precision": 0.304,
+        "recall": 0.700,
+        "f1": 0.424
       },
       "qdrant_search_tables": {
-        "expected": 20,
+        "expected": 19,
         "used": 22,
-        "correct": 18,
-        "precision": 0.818,
-        "recall": 0.900,
-        "f1": 0.857
+        "correct": 13,
+        "precision": 0.591,
+        "recall": 0.684,
+        "f1": 0.634
+      },
+      "qdrant_search_schemas": {
+        "expected": 14,
+        "used": 13,
+        "correct": 13,
+        "precision": 1.000,
+        "recall": 0.929,
+        "f1": 0.963
       }
     }
   },
   "type_analysis": {
     "text": {
-      "count": 25,
-      "answer_rate": 1.0,
-      "schema_f1_avg": 0.95,
-      "table_f1_avg": 0.85,
-      "citation_accuracy_avg": 0.78
+      "count": 40,
+      "schema_count": 0,
+      "table_count": 0,
+      "schema_f1_avg": 0.0,
+      "table_f1_avg": 0.0,
+      "citation_accuracy_avg": 0.874,
+      "answer_rate": 1.0
     },
     "table": {
-      "count": 15,
-      "answer_rate": 0.933,
-      "schema_f1_avg": 0.60,
-      "table_f1_avg": 0.92,
-      "citation_accuracy_avg": 0.85
+      "count": 10,
+      "schema_count": 0,
+      "table_count": 10,
+      "schema_f1_avg": 0.0,
+      "table_f1_avg": 0.467,
+      "citation_accuracy_avg": 0.661,
+      "answer_rate": 1.0
+    },
+    "schema": {
+      "count": 12,
+      "schema_count": 12,
+      "table_count": 0,
+      "schema_f1_avg": 0.736,
+      "table_f1_avg": 0.0,
+      "citation_accuracy_avg": 0.782,
+      "answer_rate": 1.0
     }
   },
   "ragas_metrics": {
-    "faithfulness": 0.85,
-    "answer_relevancy": 0.88,
-    "context_precision": 0.82,
-    "context_recall": 0.79
+    "faithfulness": 0.802,
+    "answer_relevancy": 0.836,
+    "context_precision": 0.848,
+    "context_recall": 0.777
   },
   "per_question_results": [...]
 }
@@ -376,15 +415,17 @@ for q in questions:
 **Tool Usage Metrics:**
 
 **High Tool F1 (>0.85):**
-- qdrant_search_text: F1=0.925 ✅ (best tool, most reliable)
+- qdrant_search_text: F1=0.966 ✅ (best tool, most reliable)
+- qdrant_search_schemas: F1=0.963 ✅ (excellent precision)
 - Agent correctly selects tools based on question type
 - Good alignment between intent and tool calls
 
 **Low Tool F1 (<0.60):**
-- qdrant_search_schemas: F1=0.400 ⚠️ (low recall - agent not calling schemas enough)
-- Check router agent prompts for schema keyword detection
-- Review intent classification ("schema" intent not triggering tool)
-- Verify entity hints not overshadowing schema needs
+- neo4j_entity_search: F1=0.424 ⚠️ (low precision - agent over-calling entities)
+- qdrant_search_tables: F1=0.634 ⚠️ (moderate - needs improvement)
+- Check router agent prompts for entity vs text search
+- Review intent classification (entity search triggered too often)
+- Verify table search keyword detection
 
 **Precision vs Recall Trade-off:**
 - High Precision, Low Recall: Agent too conservative (missing tool calls)
@@ -406,8 +447,8 @@ for q in questions:
 **Citation Accuracy:**
 
 **High Citation F1 (>0.80):**
-- Correct F-beta=0.818 with recall=0.900 ✅
-- Agent finding mandatory citations (high recall)
+- Correct F1=0.822 with recall=0.829 ✅
+- Agent finding most mandatory citations (good recall)
 - Some extra citations okay (soft precision penalty)
 
 **Low Citation F1 (<0.60):**
