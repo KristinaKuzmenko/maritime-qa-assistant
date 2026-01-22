@@ -509,14 +509,12 @@ class PromptInjectionFilter:
         cyrillic_ratio = cyrillic_count / total_letters
         latin_ratio = latin_count / total_letters
         
-        # Allow pure Cyrillic or pure Latin
+        # Allow pure Cyrillic
         if cyrillic_ratio > 0.8:
             return text  # Pure Cyrillic (Russian, Ukrainian, etc.)
-        if latin_ratio > 0.95:
-            return text  # Pure Latin (no Cyrillic at all)
         
-        # For mixed-script text, check if Cyrillic forms complete words (legitimate bilingual)
-        # vs. Cyrillic characters mixed within Latin words (homoglyph attack)
+        # Check for mixed-script WORDS (Cyrillic chars inside Latin words = homoglyph attack)
+        # vs. legitimate bilingual text (whole Russian words + whole English words)
         words = text.split()
         suspicious_words = []
         
@@ -528,15 +526,19 @@ class PromptInjectionFilter:
             if word_latin > 0 and word_cyrillic > 0:
                 suspicious_words.append(word)
         
-        # If we found mixed-script words, normalize them
-        if suspicious_words:
-            result = []
-            for char in text:
-                result.append(self.HOMOGLYPH_MAP.get(char, char))
-            return ''.join(result)
+        # If no mixed-script words found, it's legitimate (bilingual or pure Latin)
+        if not suspicious_words:
+            return text
         
-        # Otherwise it's legitimate bilingual text (whole words in each script)
-        return text
+        # If no mixed-script words found, it's legitimate (bilingual or pure Latin)
+        if not suspicious_words:
+            return text
+        
+        # Found mixed-script words - normalize them
+        result = []
+        for char in text:
+            result.append(self.HOMOGLYPH_MAP.get(char, char))
+        return ''.join(result)
     
     def _check_whitelist(self, query: str) -> bool:
         """Check if query matches maritime domain whitelist."""

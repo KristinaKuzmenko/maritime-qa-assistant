@@ -67,11 +67,14 @@ async def answer_question(
     injection_check = injection_filter.check_query(question_req.question)
     
     if not injection_check.is_safe:
+        # Handle both enum and string risk_level (for testing compatibility)
+        risk_level_str = injection_check.risk_level.value if hasattr(injection_check.risk_level, 'value') else injection_check.risk_level
+        
         logger.warning(
             f"🚨 Prompt injection detected: {injection_check.explanation}",
             extra={
                 "user_id": question_req.user_id,
-                "risk_level": injection_check.risk_level.value,  
+                "risk_level": risk_level_str,  
                 "patterns": injection_check.detected_patterns,
                 "query_preview": question_req.question[:100]
             }
@@ -79,15 +82,16 @@ async def answer_question(
         raise PromptInjectionError(
             message="Please ask a question about maritime technical documentation. "
                    "Your query contains content that cannot be processed.",
-            risk_level=injection_check.risk_level.value,  
+            risk_level=risk_level_str,  
             detected_patterns=injection_check.detected_patterns,
             query_preview=question_req.question[:100]
         )
     
     # Use sanitized query for processing
     safe_question = injection_check.sanitized_query
+    risk_level_str = injection_check.risk_level.value if hasattr(injection_check.risk_level, 'value') else injection_check.risk_level
     logger.info(
-        f"✅ Query passed injection filter (risk: {injection_check.risk_level.value})"
+        f"✅ Query passed injection filter (risk: {risk_level_str})"
     )
     
     try:
