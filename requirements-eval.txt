@@ -1,0 +1,16 @@
+# Evaluation dependencies for Maritime QA Assistant
+
+# RAGAS - RAG evaluation framework
+ragas>=0.1.0
+
+# Required by RAGAS
+datasets>=2.14.0
+langchain>=0.1.0
+openai>=1.0.0
+
+# For metrics calculation and visualization
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+seaborn>=0.13.0
