@@ -1,0 +1,32 @@
+# Production Docker Compose - MVP
+# Simple configuration with Qdrant Cloud
+
+version: '3.8'
+
+services:
+  maritime-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: maritime-app-mvp
+    ports:
+      - "8000:8000" # FastAPI Backend
+      - "8501:8501" # Streamlit Frontend
+    volumes:
+      # Only temp files and logs (everything else in S3)
+      - ./data/temp:/app/data/temp
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

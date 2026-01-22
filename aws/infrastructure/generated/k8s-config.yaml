@@ -1,0 +1,77 @@
+# =============================================================================
+# Generated Kubernetes Configuration
+# =============================================================================
+# Apply with: kubectl apply -f generated/k8s-config.yaml
+# =============================================================================
+
+# Namespace for the application
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maritime-qa
+---
+# Namespace for External Secrets Operator
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+
+---
+# ServiceAccount for External Secrets Operator (IRSA)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-secrets
+  namespace: external-secrets
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::930953062641:role/maritime-qa-dev-external-secrets-role
+
+---
+# StorageClass for Qdrant PVC
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  fsType: ext4
+  encrypted: "true"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# ServiceAccount for App (IRSA)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maritime-qa-app
+  namespace: maritime-qa
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::930953062641:role/maritime-qa-dev-app-role
+
+---
+# ServiceAccount for Qdrant (IRSA for S3 backups)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: qdrant
+  namespace: maritime-qa
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::930953062641:role/maritime-qa-dev-qdrant-role
+
+---
+# ConfigMap with S3 configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maritime-qa-config
+  namespace: maritime-qa
+data:
+  STORAGE_TYPE: "s3"
+  S3_BUCKET_NAME: "maritime-qa-files"
+  S3_BACKUP_BUCKET: "maritime-qa-qdrant-backups"
+  AWS_REGION: "us-east-1"
+  QDRANT_HOST: "qdrant.maritime-qa.svc.cluster.local"
+  QDRANT_PORT: "6333"

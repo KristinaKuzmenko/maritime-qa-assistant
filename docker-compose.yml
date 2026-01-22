@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: maritime-qdrant
+    ports:
+      - "6333:6333" # HTTP API
+      - "6334:6334" # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - maritime-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:6333/healthz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m" # Max size per log file
+        max-file: "3" # Keep 3 rotated files (15MB total)
+        compress: "true" # Compress rotated files
+  # Maritime QA Assistant (Backend + Frontend)
+  maritime-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: maritime-app
+    ports:
+      - "8000:8000" # FastAPI Backend
+      - "8501:8501" # Streamlit Frontend
+    volumes:
+      # Temporary files (cleared after processing)
+      - ./data/temp:/app/data/temp
+      # Logs
+      - ./logs:/app/logs
+      # Model weights (optional, for local development)
+      - ./backend/models:/app/backend/models
+      # Note: uploads, schemas, and tables are stored in S3
+      # For local storage mode, add:
+      # - ./data/uploads:/app/data/uploads
+      # - ./data/schemas:/app/data/schemas
+      # - ./data/tables:/app/data/tables
+    environment:
+      # Qdrant Configuration
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+
+      # Neo4j Configuration (Cloud)
+      - NEO4J_URI=${NEO4J_URI}
+      - NEO4J_USER=${NEO4J_USER}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_DATABASE=${NEO4J_DATABASE:-neo4j}
+
+      # LLM Provider Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-120b}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+
+      # Storage Configuration (S3 by default)
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - LOCAL_STORAGE_PATH=/app/data
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+      # Vision API Configuration
+      - VISION_DETAIL_TABLES=${VISION_DETAIL_TABLES:-high}
+      - VISION_DETAIL_SCHEMAS=${VISION_DETAIL_SCHEMAS:-auto}
+
+      # App Configuration
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - CHUNK_SIZE=${CHUNK_SIZE:-50}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-209715200}
+
+      # Python Configuration
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/backend:/app/frontend
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - maritime-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m" # Max size per log file
+        max-file: "5" # Keep 5 rotated files (50MB total)
+        compress: "true" # Compress rotated files
+
+volumes:
+  qdrant_data:
+    driver: local
+
+networks:
+  maritime-network:
+    driver: bridge
