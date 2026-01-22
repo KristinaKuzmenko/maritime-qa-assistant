@@ -40,6 +40,7 @@ os.chdir(project_root)
 # Now import from backend
 from backend.workflow import build_qa_graph, GraphState
 from backend.core.config import settings
+from backend.core.dependencies import set_services, get_qa_graph, get_graph_client, get_vector_service
 from backend.services.vector_service import VectorService
 from backend.services.embedding_service import EmbeddingService
 from qdrant_client import QdrantClient
@@ -438,6 +439,7 @@ def analyze_by_question_type(
 ) -> Dict[str, Any]:
     """
     Analyze metrics by question type (text/table/schema/mixed).
+    Only includes schema/table metrics when they are expected in ground truth.
     """
     type_metrics = defaultdict(lambda: {
         "count": 0,
@@ -449,10 +451,27 @@ def analyze_by_question_type(
     
     for i, example in enumerate(eval_data):
         q_type = example.get("expected_type", {}).get("primary_type", "unknown")
+        ground_truth = example.get("ground_truth", {})
         
         type_metrics[q_type]["count"] += 1
-        type_metrics[q_type]["schema_f1"].append(schema_scores[i]["f1"])
-        type_metrics[q_type]["table_f1"].append(table_scores[i]["f1"])
+        
+        # Include schema F1 if schemas were expected (based on question type OR actual ground truth)
+        has_expected_schemas = (
+            q_type in ["schema", "mixed"] or 
+            len(ground_truth.get("figures", [])) > 0
+        )
+        if has_expected_schemas:
+            type_metrics[q_type]["schema_f1"].append(schema_scores[i]["f1"])
+        
+        # Include table F1 if tables were expected (based on question type OR actual ground truth)
+        has_expected_tables = (
+            q_type in ["table", "mixed"] or 
+            len(ground_truth.get("tables", [])) > 0
+        )
+        if has_expected_tables:
+            type_metrics[q_type]["table_f1"].append(table_scores[i]["f1"])
+        
+        # Always include citation accuracy
         type_metrics[q_type]["citation_accuracy"].append(citation_scores[i]["f1"])
         
         if predictions[i]["answer_text"]:
@@ -463,6 +482,8 @@ def analyze_by_question_type(
     for q_type, metrics in type_metrics.items():
         aggregated[q_type] = {
             "count": metrics["count"],
+            "schema_count": len(metrics["schema_f1"]),  # Questions with expected schemas
+            "table_count": len(metrics["table_f1"]),    # Questions with expected tables
             "schema_f1_avg": sum(metrics["schema_f1"]) / len(metrics["schema_f1"]) if metrics["schema_f1"] else 0,
             "table_f1_avg": sum(metrics["table_f1"]) / len(metrics["table_f1"]) if metrics["table_f1"] else 0,
             "citation_accuracy_avg": sum(metrics["citation_accuracy"]) / len(metrics["citation_accuracy"]) if metrics["citation_accuracy"] else 0,
@@ -532,8 +553,19 @@ def print_type_analysis(type_analysis: Dict[str, Any]):
             metrics = type_analysis[q_type]
             print(f"\n{q_type.upper()} questions ({metrics['count']} total):")
             print(f"   Answer Rate:       {metrics['answer_rate']:.1%}")
-            print(f"   Schema F1:         {metrics['schema_f1_avg']:.3f}")
-            print(f"   Table F1:          {metrics['table_f1_avg']:.3f}")
+            
+            # Show schema F1 only if schemas were expected
+            if metrics['schema_count'] > 0:
+                print(f"   Schema F1:         {metrics['schema_f1_avg']:.3f} (n={metrics['schema_count']})")
+            else:
+                print(f"   Schema F1:         N/A (no schemas expected)")
+            
+            # Show table F1 only if tables were expected
+            if metrics['table_count'] > 0:
+                print(f"   Table F1:          {metrics['table_f1_avg']:.3f} (n={metrics['table_count']})")
+            else:
+                print(f"   Table F1:          N/A (no tables expected)")
+            
             print(f"   Citation Accuracy: {metrics['citation_accuracy_avg']:.3f}")
 
 
@@ -571,17 +603,24 @@ def visualize_results(results: Dict[str, Any], output_dir: str = "evaluation_plo
     fig.suptitle("Metrics by Question Type", fontsize=16, fontweight='bold')
     
     types = list(type_analysis.keys())
-    schema_f1 = [type_analysis[t]["schema_f1_avg"] for t in types]
-    table_f1 = [type_analysis[t]["table_f1_avg"] for t in types]
+    # Only show schema/table F1 for types where they were expected
+    schema_f1 = [type_analysis[t]["schema_f1_avg"] if type_analysis[t]["schema_count"] > 0 else None for t in types]
+    table_f1 = [type_analysis[t]["table_f1_avg"] if type_analysis[t]["table_count"] > 0 else None for t in types]
     citation_acc = [type_analysis[t]["citation_accuracy_avg"] for t in types]
     answer_rate = [type_analysis[t]["answer_rate"] for t in types]
     
-    axes[0, 0].bar(types, schema_f1, color='skyblue')
-    axes[0, 0].set_title('Schema Inclusion F1')
+    # Plot schema F1 (replace None with 0 for display, but mark with different color)
+    schema_colors = ['lightgray' if v is None else 'skyblue' for v in schema_f1]
+    schema_values = [0 if v is None else v for v in schema_f1]
+    axes[0, 0].bar(types, schema_values, color=schema_colors)
+    axes[0, 0].set_title('Schema Inclusion F1 (gray = N/A)')
     axes[0, 0].set_ylim(0, 1)
     
-    axes[0, 1].bar(types, table_f1, color='lightcoral')
-    axes[0, 1].set_title('Table Inclusion F1')
+    # Plot table F1 (replace None with 0 for display, but mark with different color)
+    table_colors = ['lightgray' if v is None else 'lightcoral' for v in table_f1]
+    table_values = [0 if v is None else v for v in table_f1]
+    axes[0, 1].bar(types, table_values, color=table_colors)
+    axes[0, 1].set_title('Table Inclusion F1 (gray = N/A)')
     axes[0, 1].set_ylim(0, 1)
     
     axes[1, 0].bar(types, citation_acc, color='lightgreen')
@@ -710,11 +749,31 @@ async def evaluate_rag_system(
     # Initialize workflow
     print("\n🤖 Initializing workflow...")
     
-    # Create clients
-    qdrant_client = QdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-    )
+    # Create clients (with proper cloud Qdrant support)
+    # Match logic from main.py for cloud vs local Qdrant
+    if settings.qdrant_api_key:
+        use_https = getattr(settings, "qdrant_use_https", True)
+        if use_https:
+            qdrant_url = f"https://{settings.qdrant_host}:{settings.qdrant_port}"
+            qdrant_client = QdrantClient(
+                url=qdrant_url,
+                api_key=settings.qdrant_api_key,
+            )
+            print(f"✅ Qdrant client initialized (cloud): {qdrant_url}")
+        else:
+            qdrant_client = QdrantClient(
+                host=settings.qdrant_host,
+                port=settings.qdrant_port,
+                api_key=settings.qdrant_api_key,
+            )
+            print(f"✅ Qdrant client initialized (cloud, no HTTPS): {settings.qdrant_host}:{settings.qdrant_port}")
+    else:
+        qdrant_client = QdrantClient(
+            host=settings.qdrant_host,
+            port=settings.qdrant_port,
+        )
+        print(f"✅ Qdrant client initialized (local): {settings.qdrant_host}:{settings.qdrant_port}")
+    
     neo4j_driver = AsyncGraphDatabase.driver(
         settings.neo4j_uri,
         auth=(settings.neo4j_user, settings.neo4j_password)
@@ -722,16 +781,46 @@ async def evaluate_rag_system(
     embedding_service = EmbeddingService(api_key=settings.openai_api_key)
     vector_service = VectorService(embedding_service=embedding_service)
     
+    # Create Neo4jClient (graph_client) for high-level operations
+    from backend.services.graph_service import Neo4jClient
+    graph_client = Neo4jClient(
+        uri=settings.neo4j_uri,
+        user=settings.neo4j_user,
+        password=settings.neo4j_password,
+        database=settings.neo4j_database,
+    )
+    await graph_client.connect()
+    print("✅ Neo4j graph client connected")
+    
     # ⚡ OPTIMIZATION: Preload entities before building workflow
     from backend.workflow import preload_entities, tool_ctx
     print("⚡ Preloading entities from Neo4j...")
     tool_ctx.neo4j_driver = neo4j_driver
+    tool_ctx.graph_client = graph_client  # Set graph_client in tool_ctx
     known_entities = await preload_entities(neo4j_driver)
     tool_ctx.known_entities = known_entities
     tool_ctx.entities_loaded = True
     print(f"✅ Preloaded {len(known_entities)} entities")
     
-    workflow = build_qa_graph(qdrant_client, neo4j_driver, vector_service)
+    workflow = build_qa_graph(
+        qdrant_client=qdrant_client,
+        neo4j_driver=neo4j_driver,
+        vector_service=vector_service,
+        neo4j_uri=settings.neo4j_uri,
+        neo4j_auth=(settings.neo4j_user, settings.neo4j_password),
+        graph_client=graph_client,
+    )
+    
+    # Register services in dependency injection system
+    set_services(
+        graph_client=graph_client,
+        vector_service=vector_service,
+        embedding_service=embedding_service,
+        storage_service=None,  # Not needed for evaluation
+        document_processor=None,  # Not needed for evaluation
+        qa_graph=workflow,
+    )
+    print("✅ Services registered in dependency injection system")
     print("✅ Workflow ready")
     
     # Run agent on all questions
@@ -1014,9 +1103,22 @@ async def evaluate_rag_system(
     # Cleanup connections
     print("\n🔌 Closing connections...")
     try:
-        await neo4j_driver.close()
-        qdrant_client.close()
-        print("✅ Connections closed")
+        if graph_client:
+            await graph_client.close()
+        if neo4j_driver:
+            await neo4j_driver.close()
+        if qdrant_client:
+            qdrant_client.close()
+        # Clear dependency injection services
+        set_services(
+            graph_client=None,
+            vector_service=None,
+            embedding_service=None,
+            storage_service=None,
+            document_processor=None,
+            qa_graph=None,
+        )
+        print("✅ Connections closed and services unregistered")
     except Exception as e:
         print(f"⚠️  Cleanup warning: {e}")
     
