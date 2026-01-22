@@ -1,0 +1,183 @@
+version: '3.8'
+
+# Docker Compose for Benchmarking with LOCAL or CLOUD infrastructure
+#
+# 📦 TWO PROFILES:
+#   - "load"  → Local Qdrant (free, fast, infrastructure tests)
+#   - "real"  → Cloud services (expensive, production validation)
+#
+# ⚙️  SETUP:
+#   1. Configure .env with credentials:
+#      - NEO4J_URI=neo4j+s://<aura-instance>.databases.neo4j.io
+#      - NEO4J_PASSWORD=<your-password>
+#      - QDRANT_HOST=<your-cluster>.aws.cloud.qdrant.io  (for cloud)
+#      - QDRANT_API_KEY=<your-api-key>  (for cloud)
+#      - OPENAI_API_KEY=<your-key>
+#      - CEREBRAS_API_KEY=<your-key>
+#   
+#   2. Place test PDFs in data/test_docs/ (optional for benchmark_real)
+#
+# 🚀 COMMANDS:
+#
+#   A) Load Tests (LOCAL Qdrant, FREE):
+#      docker-compose -f docker-compose.benchmark.yml --profile load up --abort-on-container-exit
+#      
+#      Or manually:
+#      docker-compose -f docker-compose.benchmark.yml --profile load up -d qdrant
+#      docker-compose -f docker-compose.benchmark.yml run --rm benchmark-load
+#      docker-compose -f docker-compose.benchmark.yml down
+#
+#   B) Real API Tests (CLOUD services, EXPENSIVE $1-10):
+#      docker-compose -f docker-compose.benchmark.yml --profile real run --rm benchmark-real
+#      
+#      Or specific test:
+#      docker-compose -f docker-compose.benchmark.yml --profile real run --rm benchmark-real \
+#        pytest backend/tests/benchmark_real.py::test_real_cloud_services_connection -v
+#
+#   C) Clean up:
+#      docker-compose -f docker-compose.benchmark.yml down -v
+#
+# 💰 COST SUMMARY:
+#     - Load tests (local):  $0 (free)
+#     - Real tests (cloud):  ~$0.0001-$10 depending on test
+
+services:
+  # ==========================================================================
+  # LOCAL QDRANT (for profile: load)
+  # ==========================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: benchmark-qdrant
+    profiles: [ "load" ] # Only starts with --profile load
+    ports:
+      - "6333:6333" # HTTP API
+      - "6334:6334" # gRPC API
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - benchmark-network
+    healthcheck:
+      # FIX: Use wget instead of /dev/tcp (bash-specific, not available in Qdrant image)
+      test: [ "CMD", "/qdrant/qdrant", "--version" ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ==========================================================================
+  # LOAD TESTS (local Qdrant, profile: load)
+  # ==========================================================================
+  benchmark-load:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: benchmark
+    container_name: maritime-benchmark-load
+    profiles: [ "load" ] # Only starts with --profile load
+    restart: "no"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override to use LOCAL Qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_API_KEY=
+      - QDRANT_USE_HTTPS=false
+    # Note: env_file loads all variables from .env
+    # Don't add environment: section to avoid overriding with host environment
+
+    volumes:
+      - ./data/test_docs:/app/data/test_docs:ro
+      - ./benchmark_results:/app/.benchmarks
+      - ./reports:/app/reports
+      - ./data/temp:/app/data/temp
+      - ./logs:/app/logs
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "⚡ Running LOAD tests with LOCAL Qdrant (FREE)"
+        echo ""
+        mkdir -p /app/reports
+        rm -rf /app/.pytest_cache /app/backend/tests/__pycache__
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        pytest backend/tests/benchmark_load.py \
+          -v -s \
+          --tb=short \
+          -p no:cacheprovider \
+          2>&1 | tee /app/reports/load_test_$$TIMESTAMP.txt
+        echo ""
+        echo "✅ Load test completed!"
+        echo "Report: reports/load_test_$$TIMESTAMP.txt"
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  # ==========================================================================
+  # REAL TESTS (cloud services, profile: real)
+  # ==========================================================================
+  benchmark-real:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: benchmark
+    container_name: maritime-benchmark-real
+    profiles: [ "real" ] # Only starts with --profile real
+    restart: "no"
+    # NO depends_on - uses cloud services from .env
+    env_file:
+      - .env
+    # NO environment overrides - uses cloud credentials from .env
+    volumes:
+      - ./data/test_docs:/app/data/test_docs:ro
+      - ./benchmark_results:/app/.benchmarks
+      - ./reports:/app/reports
+      - ./data/temp:/app/data/temp
+      - ./logs:/app/logs
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "⚠️  Running REAL tests with CLOUD services (COSTS MONEY)"
+        echo "   Using cloud Qdrant from QDRANT_HOST env var"
+        echo ""
+        mkdir -p /app/reports
+        rm -rf /app/.pytest_cache /app/backend/tests/__pycache__
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        pytest backend/tests/benchmark_real.py \
+          -v -s \
+          --tb=short \
+          -p no:cacheprovider \
+          2>&1 | tee /app/reports/real_test_$$TIMESTAMP.txt
+        echo ""
+        echo "✅ Real benchmark completed!"
+        echo "Report: reports/real_test_$$TIMESTAMP.txt"
+    # NO networks - direct internet access to cloud services
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+networks:
+  benchmark-network:
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+    driver: local
