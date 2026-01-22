@@ -33,11 +33,18 @@ from workflow import build_qa_graph, preload_entities
 
 from routes import health, documents, chat
 from core.config import settings
+from core.dependencies import set_services
+from core.exceptions import MaritimeQAException
 
 
 # Configure logging with file output
 log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
+try:
+    log_dir.mkdir(exist_ok=True)
+except (OSError, PermissionError):
+    # Fallback to /tmp if logs/ is not writable (e.g., in read-only containers)
+    log_dir = Path("/tmp/logs")
+    log_dir.mkdir(exist_ok=True)
 
 # Create formatters
 detailed_formatter = logging.Formatter(
@@ -150,9 +157,15 @@ async def lifespan(app: FastAPI):
             )
             await graph_client.connect()
 
+            # Configure Neo4j driver with proper timeouts and connection pooling
             neo4j_driver = AsyncGraphDatabase.driver(
                 settings.neo4j_uri,
-                auth=(settings.neo4j_user, settings.neo4j_password)
+                auth=(settings.neo4j_user, settings.neo4j_password),
+                max_connection_lifetime=3600,  # 1 hour
+                max_connection_pool_size=50,
+                connection_acquisition_timeout=90.0,  # 90 seconds
+                connection_timeout=30.0,  # 30 seconds
+                keep_alive=True,
             )
 
             logger.info("✅ Neo4j connected")
@@ -209,13 +222,10 @@ async def lifespan(app: FastAPI):
                     tool_ctx.neo4j_driver = neo4j_driver
                     tool_ctx.graph_client = graph_client  # Neo4jClient for high-level operations
                     
-                    logger.info("⚡ Preloading entities from Neo4j...")
                     known_entities = await preload_entities(neo4j_driver)
-                    logger.info(f"📊 Received {len(known_entities)} entities from preload_entities")
                     tool_ctx.known_entities = known_entities
                     tool_ctx.entities_loaded = True
-                    logger.info(f"✅ Set tool_ctx: entities_loaded={tool_ctx.entities_loaded}, count={len(tool_ctx.known_entities)}")
-                    logger.info(f"✅ Preloaded {len(known_entities)} entities")
+                    logger.info(f"✅ Preloaded {len(known_entities)} entities into tool_ctx")
                     
                     qa_graph = build_qa_graph(
                         qdrant_client=qdrant_client,
@@ -271,31 +281,15 @@ async def lifespan(app: FastAPI):
                 logger.error(f"❌ Document processors failed: {e}")
         
         
-        # Make services globally available to routes
-        import routes.documents as doc_routes
-        import routes.chat as chat_routes
-        import routes.health as health_routes
-
-        doc_routes.graph_client = graph_client
-        doc_routes.vector_service = vector_service
-        doc_routes.embedding_service = embedding_service
-        doc_routes.storage_service = storage_service
-        doc_routes.document_processor = document_processor
-        doc_routes.schema_extractor = schema_extractor
-        doc_routes.table_extractor = table_extractor
-        doc_routes.layout_analyzer = layout_analyzer
-
-        chat_routes.qa_graph = qa_graph
-        chat_routes.graph_client = graph_client
-        chat_routes.qdrant_client = qdrant_client
-        chat_routes.neo4j_driver = neo4j_driver
-        chat_routes.storage_service = storage_service  # For URL transformation
-
-
-        health_routes.graph_client = graph_client
-        health_routes.vector_service = vector_service
-        health_routes.storage_service = storage_service
-        health_routes.qa_graph = qa_graph
+        # ✅ Set services for dependency injection
+        set_services(
+            graph_client=graph_client,
+            vector_service=vector_service,
+            embedding_service=embedding_service,
+            storage_service=storage_service,
+            document_processor=document_processor,
+            qa_graph=qa_graph
+        )
         
         logger.info("=" * 80)
         logger.info("✅ API is ready!")
@@ -358,6 +352,28 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
         status_code=exc.status_code,
         content={"detail": exc.detail},
         headers=exc.headers
+    )
+
+# Exception handler for Maritime QA custom exceptions
+@app.exception_handler(MaritimeQAException)
+async def maritime_exception_handler(request: Request, exc: MaritimeQAException):
+    """Handle all Maritime QA custom exceptions."""
+    logger.error(
+        f"{exc.__class__.__name__}: {exc.message}",
+        extra={
+            "status_code": exc.status_code,
+            "details": exc.details,
+            "path": request.url.path
+        }
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.__class__.__name__,
+            "message": exc.message,
+            "details": exc.details
+        }
     )
 
 @app.middleware("http")

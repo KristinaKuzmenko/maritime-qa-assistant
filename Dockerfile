@@ -6,13 +6,16 @@
 # =============================================================================
 # Base stage: system dependencies and Python packages
 # =============================================================================
-FROM python:3.10-slim as base
+FROM python:3.10-slim-bookworm as base
 
 # Install system dependencies and update security packages
-# apt-get upgrade ensures all system packages (including GnuPG) are patched
-RUN apt-get -o Acquire::Retries=3 update && \
-    apt-get upgrade -y && \
-    apt-get install -y \
+ENV DEBIAN_FRONTEND=noninteractive
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true && \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list 2>/dev/null || true && \
+    printf 'Acquire::Retries "10";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80retries && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
@@ -22,8 +25,8 @@ RUN apt-get -o Acquire::Retries=3 update && \
     libxext6 \
     libxrender1 \
     libgomp1 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -53,12 +56,40 @@ ENV NEO4J_PASSWORD=test_password \
     OPENAI_API_KEY=test_key \
     AUTH_SECRET_KEY=test_secret_key_minimum_32_characters_long
 
-# Run tests (unit tests only, skip integration tests that need external services)
+# Run tests (unit tests only, skip integration/benchmark tests that need external services)
 # Exclude evaluation tests (require ragas from requirements-eval.txt)
-RUN python -m pytest backend/tests/ -v --tb=short -m "not integration" \
+# Exclude benchmark tests (expensive, need real API calls and documents)
+RUN python -m pytest backend/tests/ -v --tb=short -m "not integration and not benchmark" \
     --ignore=backend/tests/test_evaluation_metrics.py \
     --deselect=backend/tests/test_workflow.py::TestLLMInstance::test_groq_missing_key_raises || \
     (echo "❌ Tests failed! Build stopped." && exit 1)
+
+# =============================================================================
+# Benchmark stage: for performance testing in staging (not for production!)
+# =============================================================================
+FROM base as benchmark
+
+# Install test dependencies (includes pytest-benchmark)
+COPY requirements-test.txt .
+RUN pip install --no-cache-dir -r requirements-test.txt
+
+# Copy application code
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+COPY pytest.ini .
+
+# Set Python path
+ENV PYTHONPATH=/app/frontend:/app/backend:$PYTHONPATH
+
+# Create data directory for test documents
+RUN mkdir -p /app/data/test_docs
+
+# Note: Mount real test documents at runtime:
+#   docker run -v ./data/test_docs:/app/data/test_docs maritime-qa:benchmark
+#   pytest backend/tests/benchmark_real.py -v --benchmark-only
+
+# Default command: run benchmarks
+CMD ["pytest", "backend/tests/benchmark_real.py", "-v", "--benchmark-only"]
 
 # =============================================================================
 # Production stage: clean image without test dependencies
@@ -96,8 +127,9 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # =============================================================================
 # CI/CD Build Pipeline:
-#   1. Run tests:    docker build --target test -t maritime-qa-app:test .
-#   2. Build prod:   docker build --target production -t maritime-qa-app:latest .
+#   1. Run tests:      docker build --target test -t maritime-qa-app:test .
+#   2. Build prod:     docker build --target production -t maritime-qa-app:latest .
+#   3. Run benchmarks: docker build --target benchmark -t maritime-qa-app:benchmark .
 #   3. Push to ECR:  docker push 930953062641.dkr.ecr.us-east-1.amazonaws.com/maritime-qa-app:latest
 #
 # Local Development:
