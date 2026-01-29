@@ -37,11 +37,12 @@ class Neo4jClient:
         self.driver = AsyncGraphDatabase.driver(
             self.uri,
             auth=(self.user, self.password),
-            max_connection_lifetime=3600,  # 1 hour - prevents stale connections
-            max_connection_pool_size=50,  # Allow more concurrent connections
+            max_connection_lifetime=300,  
+            max_connection_pool_size=10,  # Allow more concurrent connections
             connection_acquisition_timeout=60.0,  # Wait up to 60s for connection
             connection_timeout=30.0,  # 30s socket timeout
             keep_alive=True,  # Send periodic keepalive packets
+            liveness_check_timeout=5.0,  # Check connection health before use
         )
         await self.verify_connection()
         await self.create_constraints_and_indexes()

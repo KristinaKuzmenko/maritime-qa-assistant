@@ -157,15 +157,17 @@ async def lifespan(app: FastAPI):
             )
             await graph_client.connect()
 
-            # Configure Neo4j driver with proper timeouts and connection pooling
+            # Configure Neo4j driver with automatic recovery
+            # liveness_check_timeout enables detection of dead connections
             neo4j_driver = AsyncGraphDatabase.driver(
                 settings.neo4j_uri,
                 auth=(settings.neo4j_user, settings.neo4j_password),
-                max_connection_lifetime=3600,  # 1 hour
-                max_connection_pool_size=50,
+                max_connection_lifetime=300, 
+                max_connection_pool_size=10,
                 connection_acquisition_timeout=90.0,  # 90 seconds
                 connection_timeout=30.0,  # 30 seconds
                 keep_alive=True,
+                liveness_check_timeout=5.0,  # CHECK connection before use 
             )
 
             logger.info("✅ Neo4j connected")
