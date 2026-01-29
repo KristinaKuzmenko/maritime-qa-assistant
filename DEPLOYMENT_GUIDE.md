@@ -147,7 +147,7 @@ sequenceDiagram
 |---|-------|-----------|--------|----------|
 | 1 | **Code Push** | Developer | `git push` to repository | 1 sec |
 | 2 | **Image Build** | GitHub Actions | Build Docker image + tests | 3-5 min |
-| 3 | **Publication** | GitHub Actions → ECR | Push image to ECR (OIDC auth) | 1-2 min |
+| 3 | **Publication** | GitHub Actions → ECR | Push image to ECR (AWS credentials) | 1-2 min |
 | 4 | **Change Detection** | ArgoCD | Poll Git every 3 min | 0-3 min |
 | 5 | **Synchronization** | ArgoCD → K8s | Apply manifests | 10-30 sec |
 | 6 | **Secrets** | ESO → AWS Secrets | Update Kubernetes Secret | 5-10 sec |
@@ -160,21 +160,21 @@ sequenceDiagram
 - **Workflow:** `.github/workflows/docker-build-push.yml`
 - **Trigger:** Push to `main` branch
 - **Steps:**
-  1. Authentication via AWS OIDC (no secrets!)
+  1. Authentication via AWS Access Keys (from GitHub Secrets)
   2. Build Docker image (`--target production`)
   3. Run tests (`--target test`)
   4. Tag image: `<commit-sha>` + `latest`
   5. Push to ECR
-- **Security:** IAM role via OIDC (no AWS keys needed in GitHub)
+- **Security:** IAM user credentials stored in GitHub Secrets
 
-**🔒 Important: AWS Credentials NOT Required in GitHub Secrets!**
-- ❌ **DO NOT** add `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` to GitHub Secrets
-- ✅ **USE** OIDC authentication (configured in `aws/github-actions` Terraform module)
-- ✅ **ONLY** add these to GitHub Secrets (see CI/CD section for details):
-  - `AWS_ACCOUNT_ID` (not sensitive, just for convenience)
-  - `AWS_REGION` (not sensitive)
-  - `ECR_REPOSITORY` (not sensitive)
-  - Optional: API keys for testing (e.g., `TEST_OPENAI_API_KEY`)
+**🔒 Required GitHub Secrets:**
+- ✅ **AWS_ACCESS_KEY_ID** - IAM user access key (create via `aws iam create-access-key`)
+- ✅ **AWS_SECRET_ACCESS_KEY** - IAM user secret key
+- Optional:
+  - `AWS_ACCOUNT_ID` (not sensitive, for convenience)
+  - `AWS_REGION` (not sensitive, default: us-east-1)
+  - `ECR_REPOSITORY` (not sensitive, default: maritime-qa-app)
+  - API keys for testing (e.g., `TEST_OPENAI_API_KEY`)
 
 #### 2. ArgoCD (CD Pipeline)
 - **Mode:** Automatic sync with self-heal
@@ -193,23 +193,21 @@ sequenceDiagram
 #### 4. IRSA (IAM Roles for Service Accounts)
 - **Application Pod:** S3 access (read/write files)
 - **ESO:** Secrets Manager access (read secrets)
-- **GitHub Actions:** ECR access (publish images) - **configured via OIDC, not IAM keys**
+- **GitHub Actions:** ECR access (publish images) - uses IAM user with Access Keys
 
 **Authentication Methods by Component:**
 
 | Component | Authentication | Credentials Location |
 |-----------|---------------|---------------------|
-| **GitHub Actions** | OIDC (AWS IAM role) | ❌ No secrets in GitHub |
+| **GitHub Actions** | AWS Access Keys (IAM user) | ✅ GitHub Secrets |
 | **Application Pods** | IRSA (K8s ServiceAccount) | ❌ No secrets in Pod |
 | **External Secrets** | IRSA (K8s ServiceAccount) | ❌ No secrets in ESO |
 | **Runtime Secrets** | AWS Secrets Manager | ✅ Managed by AWS |
 
-**Why OIDC is Better Than Access Keys:**
-- ✅ No long-term credentials to rotate
-- ✅ Automatic token refresh
-- ✅ No secrets stored in GitHub
-- ✅ Audit trail in AWS CloudTrail
-- ✅ Fine-grained permissions per repository
+**Security Notes:**
+- GitHub Actions uses dedicated IAM user `github-actions-maritime-qa` with minimal ECR-only permissions
+- Access keys stored securely in GitHub repository secrets (encrypted at rest)
+- Rotate keys periodically using `aws iam create-access-key` command
 
 ### Comparison with Traditional CI/CD
 
@@ -220,7 +218,7 @@ sequenceDiagram
 | **Rollback** | Manually via kubectl/helm | `git revert` + auto-sync |
 | **Drift detection** | ❌ None | ✅ Automatic (self-heal) |
 | **Audit trail** | CI logs (temporary) | Git history (permanent) |
-| **Credentials** | Stored in CI (secrets) | Minimal (IRSA + OIDC) |
+| **Credentials** | Stored in CI (secrets) | Minimal (IRSA for pods, Access Keys for CI) |
 | **Multi-cluster** | Complex | Simple (1 ArgoCD → N clusters) |
 
 ### Data Flow
@@ -588,15 +586,27 @@ terraform apply -auto-approve
 **To destroy and recreate infrastructure:**
 
 ```bash
-# Step 1: Delete Kubernetes resources first (if needed)
+# Step 1: Delete Kubernetes Ingress/Service (AWS Load Balancer Controller creates ALB/NLB)
 kubectl delete ingress --all -n maritime-qa
 kubectl delete svc --all -n maritime-qa
 
-# Step 2: Destroy Terraform infrastructure
+# Step 2: CRITICAL - Delete Load Balancers created by AWS LB Controller
+# These block VPC deletion (not managed by Terraform)
+aws elbv2 describe-load-balancers --region us-east-1 \
+  --query 'LoadBalancers[?contains(LoadBalancerName, `k8s-maritime`)].LoadBalancerArn' \
+  --output text | xargs -I {} aws elbv2 delete-load-balancer --load-balancer-arn {} --region us-east-1
+
+# Step 3: Delete Security Groups created by Kubernetes
+aws ec2 describe-security-groups --region us-east-1 \
+  --filters "Name=vpc-id,Values=<VPC_ID>" \
+  --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+  --output text | xargs -I {} aws ec2 delete-security-group --group-id {} --region us-east-1
+
+# Step 4: Destroy Terraform infrastructure
 cd aws/infrastructure
 terraform destroy -auto-approve
 
-# If you want to keep ECR 
+# If you want to keep ECR (recommended to preserve images):
 terraform destroy -auto-approve \
   -target=module.eks \
   -target=module.vpc \
@@ -606,7 +616,7 @@ terraform destroy -auto-approve \
   -target=aws_iam_role_policy_attachment.app_s3 \
   -target=aws_iam_role_policy.app_cloudwatch
 
-# Step 3: Recreate infrastructure
+# Step 5: Recreate infrastructure
 # If you get error "RepositoryAlreadyExistsException" (ECR repo from previous deployment):
 terraform import module.ecr.aws_ecr_repository.backend maritime-qa-app
 terraform apply -auto-approve
@@ -682,12 +692,7 @@ aws iam list-attached-role-policies --role-name maritime-qa-dev-app-role
 
 **Create initial admin user:**
 
-```bash
-# Option 1: Use the create_first_user.py script locally
-cd maritime-qa-assistant
-python3 create_first_user.py
-
-# Option 2: Create user manually via AWS CLI
+#  Create user manually via AWS CLI
 aws dynamodb put-item \
   --table-name dev-maritime-qa-users \
   --item '{
@@ -2696,7 +2701,7 @@ RUN python -m pytest backend/tests/ -v --tb=short -m "not integration" \
 
 #### 2. Neo4j Connection Failure
 
-**Error:** `ServiceUnavailable: Failed to establish connection`
+**Error 1:** `ServiceUnavailable: Failed to establish connection`
 
 **Solutions:**
 - Verify `NEO4J_URI` and `NEO4J_PASSWORD` are correct
@@ -2709,6 +2714,94 @@ RUN python -m pytest backend/tests/ -v --tb=short -m "not integration" \
      driver = GraphDatabase.driver('neo4j+s://...', auth=('neo4j', 'pass')); \
      driver.verify_connectivity()"
   ```
+
+**Error 2:** `ServiceUnavailable: Unable to retrieve routing information`
+
+**Description:** Occurs during query execution when Neo4j driver cannot connect to database. Common in production with Neo4j Aura.
+
+**Symptoms:**
+```
+neo4j.exceptions.ServiceUnavailable: Unable to retrieve routing information
+Traceback: await self._pool.update_routing_table()
+```
+
+**Root Causes:**
+1. **Neo4j Aura temporary unavailability** - Server restart or maintenance
+2. **IP whitelist restrictions** - Server IP not in allowed list
+3. **Expired credentials** - Trial period ended or password changed
+4. **Connection pool exhausted** - Too many parallel queries
+5. **Network timeouts** - Firewall or DNS issues
+
+**Solutions:**
+
+**For Docker Compose:**
+```bash
+# 1. Check Neo4j availability
+curl -v https://xxxxx.databases.neo4j.io:7687
+
+# 2. Verify environment variables
+docker-compose -f docker-compose.mvp.yml exec maritime-app-mvp env | grep NEO4J
+
+# 3. Test connection from container
+docker-compose -f docker-compose.mvp.yml exec maritime-app-mvp python3 -c "
+from neo4j import AsyncGraphDatabase
+import asyncio
+import os
+
+async def test():
+    driver = AsyncGraphDatabase.driver(
+        os.getenv('NEO4J_URI'),
+        auth=(os.getenv('NEO4J_USERNAME'), os.getenv('NEO4J_PASSWORD'))
+    )
+    async with driver.session() as session:
+        result = await session.run('RETURN 1 as num')
+        record = await result.single()
+        print(f'Connection OK: {record[\"num\"]}')
+    await driver.close()
+
+asyncio.run(test())
+"
+
+# 4. Restart container (recreates connection pool)
+docker-compose -f docker-compose.mvp.yml restart
+
+# 5. Check logs for details
+docker-compose -f docker-compose.mvp.yml logs -f | grep -i neo4j
+```
+
+**For Neo4j Aura:**
+1. Login to [Neo4j Aura Console](https://console.neo4j.io)
+2. Check instance status (should be "Running")
+3. Update IP whitelist:
+   - Click instance → "Connection" tab
+   - Add server public IP or `0.0.0.0/0` (test only!)
+4. Verify credentials haven't expired
+5. Check billing status (trial period)
+
+**For Kubernetes:**
+```bash
+# Check External Secrets sync
+kubectl get externalsecret -n maritime-qa maritime-qa-secrets
+kubectl describe externalsecret -n maritime-qa maritime-qa-secrets
+
+# Verify Secret contains correct Neo4j credentials
+kubectl get secret -n maritime-qa maritime-qa-secrets -o jsonpath='{.data.NEO4J_URI}' | base64 -d
+
+# Check pod logs for connection errors
+kubectl logs -n maritime-qa -l app=maritime-qa --tail=100 | grep -i neo4j
+
+# Restart pods to recreate connection pool
+kubectl rollout restart deployment -n maritime-qa maritime-qa-app
+```
+
+**Permanent Fix (Production):**
+- Increase connection pool size in `backend/core/config.py`:
+  ```python
+  NEO4J_MAX_CONNECTION_POOL_SIZE = 50  # Default: 10
+  NEO4J_CONNECTION_TIMEOUT = 30  # seconds
+  ```
+- Add retry logic with exponential backoff
+- Monitor Neo4j connection metrics
 
 #### 3. S3 Access Denied
 
