@@ -1,0 +1,137 @@
+name: Build and Push Docker Image to ECR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'requirements.txt'
+      - 'requirements-test.txt'
+      - 'Dockerfile'
+      - 'docker-entrypoint.sh'
+      - '.env.example'
+      - '!**.md'
+      - '!k8s/**'
+      - '!aws/**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Docker image tag (default: commit SHA)'
+        required: false
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: maritime-qa-app
+  AWS_ACCOUNT_ID: 930953062641
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC authentication
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-actions-ecr-push
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-ECR-Push
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            echo "IMAGE_TAG=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+          echo "IMAGE_TAG_SHORT=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+      
+      - name: Build Docker image
+        working-directory: maritime-qa-assistant
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+        run: |
+          docker build \
+            --target production \
+            --cache-from $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --file Dockerfile \
+            .
+      
+      - name: Run tests in Docker image
+        working-directory: maritime-qa-assistant
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+        run: |
+          docker build \
+            --target test \
+            --file Dockerfile \
+            .
+      
+      - name: Push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+      
+      - name: Get image details
+        id: image-details
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+        run: |
+          IMAGE_DIGEST=$(aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=$IMAGE_TAG \
+            --region $AWS_REGION \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> $GITHUB_OUTPUT
+          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Generate deployment summary
+        run: |
+          echo "## 🚀 Docker Image Published to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** $ECR_REPOSITORY" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** $AWS_REGION" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.tag.outputs.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image URI:** \`${{ steps.image-details.outputs.IMAGE_URI }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.image-details.outputs.IMAGE_DIGEST }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. ArgoCD буде виявлено зміни у Kubernetes-маніфестах" >> $GITHUB_STEP_SUMMARY
+          echo "2. External Secrets Operator синхронізує секрети з AWS Secrets Manager" >> $GITHUB_STEP_SUMMARY
+          echo "3. ArgoCD застосує оновлені маніфести до кластера" >> $GITHUB_STEP_SUMMARY
+          echo "4. Pod отримає новий образ і перезапуститься з оновленою конфігурацією" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
