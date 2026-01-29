@@ -39,6 +39,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Debug OIDC Token
+        run: |
+          echo "GitHub Actor: ${{ github.actor }}"
+          echo "GitHub Repository: ${{ github.repository }}"
+          echo "GitHub Ref: ${{ github.ref }}"
+          echo "Expected sub: repo:${{ github.repository }}:ref:${{ github.ref }}"
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
